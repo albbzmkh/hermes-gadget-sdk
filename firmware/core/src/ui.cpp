@@ -783,7 +783,9 @@ void Ui::draw_battery(Canvas& c, const UiModel& m, int x, int cy) {
   if (m.battery_text) {
     // Without the icon, the text itself turns green while charging.
     const uint16_t col = m.battery_charging ? (m.battery_icon ? kDim : kGreen) : m.battery_low ? kRed : kDim;
-    c.text(x, cy - (font::kGlyphHeight * s) / 2, std::to_string(m.battery) + "%", s, col);
+    // `text` puts the glyph's first row kAsciiYOffset below the y it is given, so the
+    // offset comes off the centring too: with the CJK font it is 3 px, not 0.
+    c.text(x, cy - (font::kGlyphHeight * s) / 2 - font::kAsciiYOffset * s, std::to_string(m.battery) + "%", s, col);
   }
 }
 
@@ -833,7 +835,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Error: {
       c.fill_circle(cx, cy, r, kRed);
       int tw = Canvas::text_width("!", s);
-      c.text(cx - tw / 2, cy - (7 * s) / 2, "!", s, bg_);
+      c.text(cx - tw / 2, cy - (7 * s) / 2 - font::kAsciiYOffset * s, "!", s, bg_);
       break;
     }
     case Screen::Pairing:
@@ -861,7 +863,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Prompt: {
       c.fill_circle(cx, cy, r, kAccent);
       int tw = Canvas::text_width("?", s);
-      c.text(cx - tw / 2, cy - (7 * s) / 2, "?", s, bg_);
+      c.text(cx - tw / 2, cy - (7 * s) / 2 - font::kAsciiYOffset * s, "?", s, bg_);
       break;
     }
     case Screen::Dashboard: {
@@ -899,7 +901,7 @@ void Ui::draw_header(Canvas& c, const UiModel& m) {
   int tx = cx + r + 4 * s;
   int hs = s + 1;
   int cols = cols_for(info_.width - tx - 2 * s, hs);
-  c.text(tx, cy - (font::kGlyphHeight * hs) / 2, fit(m.headline, cols), hs, kText);
+  c.text(tx, cy - (font::kGlyphHeight * hs) / 2 - font::kAsciiYOffset * hs, fit(m.headline, cols), hs, kText);
   c.fill_rect(4 * s, y0 + hh - 1, info_.width - 8 * s, 1, kFaint);
 }
 
@@ -1209,7 +1211,7 @@ void Ui::draw_profiles(Canvas& c, const UiModel& m) {
       c.fill_circle(cx, cy, g.icon / 2, initial_color(row.value));
       const std::string letter = profile_initial(row.label);
       const int big = std::max(1, g.icon * 9 / 20 / font::kGlyphHeight);
-      c.text(cx - Canvas::text_width(letter, big) / 2, cy - font::kGlyphHeight * big / 2, letter, big, kText);
+      c.text(cx - Canvas::text_width(letter, big) / 2, cy - font::kGlyphHeight * big / 2 - font::kAsciiYOffset * big, letter, big, kText);
     }
     if (current) c.ring(cx, cy, g.icon / 2 + s + 1, std::max(2, s), kAccent);
     int ty = iy + g.icon + 2 * s;
