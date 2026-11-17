@@ -1,0 +1,14 @@
+{
+  "folders": [
+    {
+      "path": "."
+    },
+    {
+      "name": "esp32 (PlatformIO)",
+      "path": "firmware/esp32"
+    }
+  ],
+  "settings": {
+    "platformio-ide.disableToolbar": false
+  }
+}

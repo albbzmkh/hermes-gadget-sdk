@@ -49,6 +49,8 @@ idf_component_register(
         "port_cardputer.cpp"
         "port_codec.cpp"
         "port_cores3.cpp"
+        "port_m5ioe1.cpp"
+        "port_m5pm1.cpp"
         "port_sticks3.cpp"
         "port_tca9554.cpp"
         "port_console.cpp"

@@ -1,0 +1,10 @@
+# M5Stack StopWatch: 16 MB flash, so the two OTA slots can be much larger than
+# the 4 MB table in partitions.csv allows. Same layout as the root table up to
+# phy_init, so a board already flashed with partitions.csv keeps its NVS and
+# only gains bigger app slots when this file is flashed over USB.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x6000
+otadata,  data, ota,     0xf000,   0x2000
+phy_init, data, phy,     0x11000,  0x1000
+ota_0,    app,  ota_0,   0x20000,  0x7e0000
+ota_1,    app,  ota_1,   0x800000, 0x7e0000

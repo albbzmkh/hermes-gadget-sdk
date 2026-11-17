@@ -19,6 +19,10 @@
 #include "hg/touch.hpp"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+#include "port_m5ioe1.hpp"
+#include "port_m5pm1.hpp"
+#endif
 #if CONFIG_HG_BOARD_WS_P4_TOUCH_LCD_7B || CONFIG_HG_BOARD_CORES3
 #include "hg/crypto.hpp"
 #include "port_camera.hpp"
@@ -82,6 +86,9 @@ hgp::AxpPower g_power;
 hgp::LatchPower g_latch_power;
 hgp::CoreS3Board g_cores3;
 hgp::StickS3Board g_sticks3;
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+hgp::M5PM1Power g_m5pm1_power;
+#endif
 hgp::PhoneLink g_phone;
 hgp::TailnetLink g_tailnet;
 #endif
@@ -447,6 +454,12 @@ extern "C" void app_main(void) {
 #endif
   // GPIO45/46 belong to VDD_IO_5 on the P4; acquire LDO4 before creating I2C0.
   i2c_master_bus_handle_t i2c_bus = io_rail_ready ? hgp::i2c::bus(board.i2c) : nullptr;
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+  // M5IOE1 controls supply + reset for AMOLED, touch and audio.
+  // Must run before amoled/touch/codec begin(). M5PM1 owns the red power key.
+  if (i2c_bus && hgp::m5ioe1().begin(i2c_bus) != ESP_OK)
+    ESP_LOGE(TAG, "M5IOE1 init failed — display/touch/audio may not work");
+#endif
   const bool peripherals_ready = io_rail_ready && (!board.cores3 || g_cores3.begin(i2c_bus)) &&
       (!board.sticks3 || g_sticks3.begin(i2c_bus)) &&
       (!board.expander_reset.mask || hgp::tca9554_reset(i2c_bus, board.expander_reset)) &&
@@ -501,6 +514,16 @@ extern "C" void app_main(void) {
     hal.power = &g_sticks3;
     g_wifi.on_battery = [] { return g_sticks3.external_power() == std::optional<bool>(false); };
   }
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+  // The red key is internal to the M5PM1; GPIO12 is only its IRQ, so the driver
+  // polls the live key state on every loop instead of trusting the interrupt.
+  if (peripherals_ready && i2c_bus && g_m5pm1_power.begin(i2c_bus)) {
+    hal.power = &g_m5pm1_power;
+    g_wifi.on_battery = [] { return g_m5pm1_power.external_power() == std::optional<bool>(false); };
+  } else {
+    ESP_LOGE(TAG, "M5PM1 init failed — red key and power telemetry unavailable");
+  }
+#endif
   const bool audio_power = peripherals_ready && (!board.axp_audio_supply || g_power.enable_audio_supply());
   if (!audio_power) ESP_LOGE(TAG, "audio supply unavailable");
   if (board.sticks3) g_codec_speaker.board_pa = [](bool on) { g_sticks3.set_amplifier(on); };
@@ -716,6 +739,10 @@ extern "C" void app_main(void) {
       esp_restart();
     }
     g_buttons.poll(app);
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+    // Short red press toggles the display; a 1.5 s hold opens/closes Settings.
+    g_m5pm1_power.poll(app, g_system.now_ms());
+#endif
 #if CONFIG_HG_BOARD_CARDPUTER_ADV
     if (hal.display == &g_compose) g_keyboard.poll(app, g_compose);
 #endif
