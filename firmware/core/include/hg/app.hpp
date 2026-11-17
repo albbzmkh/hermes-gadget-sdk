@@ -676,6 +676,9 @@ class App {
   bool show_power_notice(PowerNotice notice);
   void dismiss_charging_notice(bool darken);
   bool display_dimmed_ = false, display_sleeping_ = false, power_off_armed_ = false;
+  // The power key asked for the dark right now, so power_tick's "a screen that has
+  // not settled stays lit" rule must not undo it. Cleared by any wake.
+  bool manual_sleep_ = false;
   bool dozing_ = false, on_battery_ = false;
   void set_dozing(bool dozing);
   // Face-down sleep. Stamps are 0 until set (now() | 1 keeps 0 meaning "none").

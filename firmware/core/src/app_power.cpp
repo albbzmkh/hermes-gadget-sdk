@@ -69,6 +69,7 @@ bool App::wake_display() {
     return true;  // the input that asked is consumed, as on a timed-out screen
   }
   activity_at_ = now();
+  manual_sleep_ = false;  // awake again: the settle rule applies as usual
   const bool sleeping = display_sleeping_;
   const bool was_clock = clock_showing_;
   clock_showing_ = false;  // the clock ends at once, with the dim and sleep states
@@ -126,6 +127,11 @@ void App::on_power_key() {
     dismiss_overlay();
     update_model();
   }
+  // A board that has not settled — no network yet, or unpaired — keeps a lit
+  // screen lit (see power_tick). The key is the user saying they are done
+  // looking, so this dark has to outrank that rule; otherwise it lights the
+  // screen again on the next tick and the press reads as a flicker.
+  manual_sleep_ = true;
   display_sleeping_ = true;
   apply_backlight();
 }
@@ -348,7 +354,7 @@ void App::power_tick() {
     // Something for the user wakes the screen. A connection still settling keeps a
     // lit screen lit, but leaves a dark one dark: Wi-Fi coming and going (a commute)
     // must not turn the screen on and leave it on.
-    if (busy || (!settled && !display_sleeping_)) {
+    if (busy || (!settled && !display_sleeping_ && !manual_sleep_)) {
       wake_display();
     } else if (ringing) {
       if (display_sleeping_ || display_dimmed_) wake_display();
