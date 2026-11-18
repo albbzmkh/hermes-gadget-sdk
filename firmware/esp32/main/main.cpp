@@ -617,6 +617,12 @@ extern "C" void app_main(void) {
 #endif
   profile.default_server_url = CONFIG_HG_DEFAULT_SERVER_URL;
   profile.default_access_token = CONFIG_HG_DEFAULT_ACCESS_TOKEN;
+  // HG 本地改动：第二个后端（OpenClaw 桥，通常在同一主机的 8766 端口）。
+  // 为什么默认空：只有 StopWatch 这条产品线要双后端，其余板子保持单后端；
+  // 空值让菜单里的切换项不出现，行为和上游完全一致。地址可用串口 `set server2 <url>`
+  // 或 `set server2` 之后重启配置，不必重刷固件。
+  profile.default_alt_server_url = CONFIG_HG_DEFAULT_ALT_SERVER_URL;
+  profile.default_alt_access_token = CONFIG_HG_DEFAULT_ALT_ACCESS_TOKEN;
   profile.has_cancel_button = board.buttons.cancel >= 0 || touch;
   profile.has_scroll_buttons = (board.buttons.up >= 0 && board.buttons.down >= 0) || board.encoder.a >= 0;
   profile.wake_key = board.buttons.talk >= 0 || board.axp_power_key || board.pwr_key.enabled;

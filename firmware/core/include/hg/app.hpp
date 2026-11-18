@@ -42,6 +42,12 @@ struct DeviceProfile {
   std::string default_name = "Hermes Gadget";
   std::string default_server_url;
   std::string default_access_token;
+  // HG 本地改动：第二个服务端（alternate_server_url），为空表示本固件只连一个后端。
+  // 为什么：StopWatch 上同时跑着 Hermes 网关（8765）和一个 OpenClaw 桥（8766），
+  // 需要在不重刷固件的前提下按键切换。两个地址都存进 NVS，各自带一个访问令牌，
+  // 切换只是换 server_url_/access_token_ 再重连，握手协议完全一样（都是 gadget v1）。
+  std::string default_alt_server_url;
+  std::string default_alt_access_token;
   uint32_t mic_rate = 16000;
   float vad_min_rms = 500.0f;  // tap mode: the quietest block that counts as speech (a quiet mic wants less)
   uint32_t speaker_rate = 16000;
@@ -129,6 +135,16 @@ class App {
   bool tailnet_wanted() const { return profile_.tailnet && tailnet_on_; }
   const std::string& tailnet_key() const { return tailnet_key_; }
   const std::string& server_url() const { return server_url_; }
+  // HG 本地改动：两个后端的切换。alt 指 alternate_server_url（第二个服务端）。
+  // 为什么放在 core：切换要重连、要改 NVS、要刷新界面，都只有 App 能干净地做；
+  // 端口层（按键回调、串口命令、设置菜单）只需要调下面三个入口。
+  bool alt_configured() const { return !alt_server_url_.empty(); }
+  bool using_alt() const { return using_alt_; }
+  const std::string& alt_server_url() const { return alt_server_url_; }
+  // 切到另一个后端并立刻重连。没有配置第二个地址时什么也不做并返回 false。
+  bool switch_server();
+  // 直接指定当前后端（串口 `server hermes|openclaw` 用），不切换时返回 false。
+  bool select_server(bool alt);
   void on_transport_open();
   void on_transport_text(std::string_view text);
   void on_transport_binary(const uint8_t* data, size_t len);
@@ -436,6 +452,8 @@ class App {
   void connect_now();
   void schedule_reconnect();
   void drop_session(std::string_view reason);
+  // HG 本地改动：换后端后的重连，和 `set server` 走同一条路（关旧连接、丢会话、重新握手）。
+  void reconnect_to_new_server();
   bool send(const json::Value& msg);
   void send_hello();
   bool can_talk() const;
@@ -512,6 +530,12 @@ class App {
   std::string name_;
   std::string server_url_;
   std::string access_token_;
+  // HG 本地改动：第二个后端（alternate_server_url）与"当前在用哪个"。
+  // 为什么单独存令牌：Hermes 与 OpenClaw 桥各自有独立的 GADGET_ACCESS_TOKEN，
+  // 切换后端必须同时换令牌，否则握手会被拒。using_alt_ 也持久化，重启后回到上次的后端。
+  std::string alt_server_url_;
+  std::string alt_access_token_;
+  bool using_alt_ = false;
   TalkMode talk_mode_ = TalkMode::Hold;
   uint8_t volume_ = 70;
   uint8_t brightness_ = 100;
@@ -565,7 +589,7 @@ class App {
   enum class Menu : uint8_t { Closed, Volume, Brightness, TalkMode, TouchTalk, Profile, ProfileGrid, Microphone, Speaker, Display, Inputs,
                               Camera, Info, Power, BatteryAlert, BatteryAlertSound, ChargingNotice, ChargingSound, ChargedNotice, ChargedSound,
                               WifiDeepSleep, IdleTimer, TouchWake, FaceDownSleep, Clock, PowerOff, WifiSetup, Phone, Language, DoubleHome,
-                              WakeTalk, Animation, SdLog, Back };
+                              WakeTalk, Animation, SdLog, Backend, Back };
   enum class HardwareCheck : uint8_t { None, Microphone, Speaker, Display, Inputs };
   Menu menu_ = Menu::Closed;
   // The settings list's scroll in pixels, and where it eases to. It follows the

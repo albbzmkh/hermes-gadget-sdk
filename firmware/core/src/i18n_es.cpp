@@ -106,6 +106,12 @@ const Entry kSpanish[] = {
     {Msg::SdLog, "Registro en tarjeta SD"},
     {Msg::SdLogOn, "Activado\nEl registro se copia a hermes.log en la tarjeta microSD."},
     {Msg::SdLogOff, "Desactivado\nNo se escribe nada en la tarjeta microSD."},
+    // HG local change: switching between the two servers.
+    {Msg::Backend, "Servidor"},
+    {Msg::BackendAltOn, "OpenClaw"},
+    {Msg::BackendAltOff, "Hermes"},
+    {Msg::BackendUnavailable, "No hay un segundo servidor configurado"},
+    {Msg::BackendSwitched, "Servidor: {0}"},
     {Msg::FaceDownSleep, "Reposo boca abajo"},
     {Msg::FaceDownSleepOn, "Activado\nBoca abajo, la pantalla se apaga y Hermes guarda silencio."},
     {Msg::FaceDownSleepOff, "Desactivado\nElige para dormir cuando esté boca abajo."},

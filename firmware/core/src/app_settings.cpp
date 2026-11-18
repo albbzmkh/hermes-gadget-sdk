@@ -8,6 +8,10 @@
 
 namespace hg {
 
+// HG 本地改动：按住 TALK+CANCEL 到这一秒数打开设置（只在没配第二个后端时用）。
+// 1 秒是上游原本的时长；配了第二个后端时 1 秒改去切换后端，这里就到 3 秒。
+constexpr uint32_t kServerSwitchHoldMs = 3000;
+
 bool App::settings_hold_live() const {
   return !prompt_showing() && !ota_busy() && !wifi_setup_open() && !phone_pairing_ && !alarm_;
 }
@@ -35,6 +39,8 @@ bool App::menu_offered(Menu item) const {
     case Menu::WakeTalk: return profile_.talk_key && hal_.mic != nullptr && hal_.display != nullptr;
     case Menu::Animation: return hal_.display != nullptr;
     case Menu::SdLog: return profile_.sd_log && hal_.display != nullptr;
+    // HG 本地改动：只在配了第二个后端时才出现，单后端的板子菜单不受影响。
+    case Menu::Backend: return alt_configured();
     case Menu::FaceDownSleep: return can_sleep_face_down();
     case Menu::Clock: return hal_.display != nullptr;
     case Menu::PowerOff: return hal_.power && hal_.power->can_power_off();
@@ -217,6 +223,14 @@ void App::settings_input(Button button, bool pressed) {
     case Menu::SdLog:
       console(sd_log_ ? "set sd_log off" : "set sd_log on");
       break;
+    // HG 本地改动：选中即切换后端并重连，菜单随之关闭（因为连接状态整个变了）。
+    case Menu::Backend:
+      if (switch_server()) {
+        close_settings();
+        return;
+      }
+      check_result_ = tr(i18n::Msg::BackendUnavailable);
+      break;
     case Menu::FaceDownSleep:
       console(face_down_sleep_ ? "set face_down_sleep off" : "set face_down_sleep on");
       break;
@@ -269,8 +283,30 @@ void App::settings_tick() {
     settings_scroll_ += d > 0 ? (d + 1) / 2 : (d - 1) / 2;
     update_model();
   }
-  if (talk_held_ && cancel_held_ && !settings_chord_fired_ && !camera_open_ &&
+  // HG 本地改动：配了第二个后端时，TALK+CANCEL 同时按住变成两档：
+  //   1 秒 → 切到另一个后端（配了第二后端时 1 秒不再打开设置，否则 3 秒那档等不到）
+  //   3 秒 → 打开设置（比原来的 1 秒晚，但仍有入口）
+  // 为什么这样排：切后端是更频繁的动作，放第一档；设置是有意的长操作，多按 2 秒无妨。
+  // 两个后端的组合键都是同两个键，只能靠时长分档，不能用不同的键。
+  // 没配第二个后端（alt_configured() 为假）时完全保持上游的 1 秒打开设置。
+  const uint32_t chord_settings_ms = alt_configured() ? kServerSwitchHoldMs : 1000;
+  // 第一档（只在配了第二个后端时存在）：按住 1 秒就切换后端，切换后提示用了哪一个。
+  if (alt_configured() && talk_held_ && cancel_held_ && !settings_chord_fired_ && !camera_open_ &&
       now() - talk_down_at_ >= 1000 && now() - cancel_down_at_ >= 1000) {
+    settings_chord_fired_ = true;
+    cancel_long_fired_ = true;
+    if (switch_server()) {
+      set_hint_flash(tr(i18n::Msg::BackendSwitched,
+                        {using_alt_ ? std::string(tr(i18n::Msg::BackendAltOn))
+                                    : std::string(tr(i18n::Msg::BackendAltOff))}));
+    } else {
+      set_hint_flash(tr(i18n::Msg::BackendUnavailable));
+    }
+    update_model();
+    return;
+  }
+  if (!alt_configured() && talk_held_ && cancel_held_ && !settings_chord_fired_ && !camera_open_ &&
+      now() - talk_down_at_ >= chord_settings_ms && now() - cancel_down_at_ >= chord_settings_ms) {
     if (open_settings()) {
       settings_chord_fired_ = true;
       cancel_long_fired_ = true;
@@ -376,6 +412,8 @@ SettingRow App::settings_row(Menu item, const std::string& label, const std::str
     case Menu::WakeTalk: row.icon = Icon::Talk; row.kind = Kind::Toggle; row.level = wake_talk_; break;
     case Menu::Animation: row.icon = Icon::Screen; row.kind = Kind::Toggle; row.level = animation_; break;
     case Menu::SdLog: row.icon = Icon::Info; row.kind = Kind::Toggle; row.level = sd_log_; break;
+    // HG 本地改动：切换后端是个动作（按一下就切），不是开关。
+    case Menu::Backend: row.icon = Icon::Wifi; row.kind = Kind::Action; break;
     case Menu::Back: row.icon = Icon::Back; row.kind = Kind::Action; break;
     case Menu::Closed: break;
   }
@@ -620,6 +658,13 @@ void App::settings_item(Menu item, UiModel& m) const {
       m.detail = tr(Msg::SdLog);
       m.body = tr(sd_log_ ? Msg::SdLogOn : Msg::SdLogOff);
       break;
+    // HG 本地改动：第二个后端的切换行，值显示当前用的是哪一个。
+    case Menu::Backend: {
+      m.detail = tr(Msg::Backend);
+      const std::string& url = using_alt_ ? alt_server_url_ : server_url_;
+      m.body = std::string(tr(using_alt_ ? Msg::BackendAltOn : Msg::BackendAltOff)) + "\n" + url;
+      break;
+    }
     case Menu::FaceDownSleep:
       m.detail = tr(Msg::FaceDownSleep);
       m.body = tr(face_down_sleep_ ? Msg::FaceDownSleepOn : Msg::FaceDownSleepOff);
