@@ -229,10 +229,12 @@ void CodecAudio::apply_audio_channels() {
   // 顺序决定了谁做主，先 rx 与上游"两条一起 enable"的最终状态一致。
   if (rx_ && want_rx != rx_enabled_) {
     const esp_err_t err = want_rx ? i2s_channel_enable(rx_) : i2s_channel_disable(rx_);
+    ESP_LOGW(TAG, "i2s rx %s -> %s (err=%d)", want_rx ? "on" : "off", esp_err_to_name(err), (int)err);
     if (err == ESP_OK) rx_enabled_ = want_rx;
   }
   if (tx_ && want_tx != tx_enabled_) {
     const esp_err_t err = want_tx ? i2s_channel_enable(tx_) : i2s_channel_disable(tx_);
+    ESP_LOGW(TAG, "i2s tx %s -> %s (err=%d)", want_tx ? "on" : "off", esp_err_to_name(err), (int)err);
     if (err == ESP_OK) tx_enabled_ = want_tx;
   }
   // HG 本地改动：把这个状态同步给 mic 任务。共用编解码器的 MicPower 是"一直读"，

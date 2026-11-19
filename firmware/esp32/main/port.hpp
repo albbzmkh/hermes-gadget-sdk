@@ -171,6 +171,12 @@ class EspSystem final : public hg::System {
     uint32_t refused = 0;
   };
   static SleepTally sleep_tally();
+  // HG 本地改动：把 IDF 电源管理自己记的持锁账打出来，给 `diag pmlocks` 用。
+  // 为什么不再自己猜：EspSystem 的 awake_ 锁什么时候放、I2S 什么时候让出通道，
+  // 都是我们自己的代码，能读；但"还有别人在拦着"只能问 IDF。esp_pm_lock_get_stats()
+  // 会直接说出是哪个模块、拿了多久、多少次，不需要时序推理。
+  // 需要 CONFIG_PM_PROFILING：不开只报次数不报时长。
+  static void pm_lock_report(hg::json::Value& out);
   // A lock holds the chip out of light sleep even while dozing (a Wi-Fi join attempt).
   // A task that relies on light-sleep wakes then keeps its awake path instead.
   static void set_sleep_held(bool held);

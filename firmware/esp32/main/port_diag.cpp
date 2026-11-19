@@ -145,7 +145,11 @@ hg::json::Value stacks() {
             [](const TaskStatus_t& a, const TaskStatus_t& b) { return a.usStackHighWaterMark < b.usStackHighWaterMark; });
   for (const auto& t : tasks) {
     hg::json::Value o = hg::json::Value::object();
-    o.set("name", t.pcTaskName).set("stack_free", static_cast<unsigned>(t.usStackHighWaterMark));
+    o.set("name", t.pcTaskName).set("stack_free", static_cast<unsigned>(t.usStackHighWaterMark))
+        // HG 本地改动：把状态和优先级也带上。查"为什么凑不出空闲时间"时，
+        // 关键是有没有任务以小于门限的周期反复阻塞/唤醒——只看栈用量看不出来。
+        .set("state", static_cast<int>(t.eCurrentState))
+        .set("prio", static_cast<int>(t.uxCurrentPriority));
     out.push(o);
   }
 #endif
@@ -227,6 +231,11 @@ void report(hg::json::Value& r) {
       .set("i2c", i2c_scan())
       .set("stacks", stacks())
       .set("sleep", sleep_report());
+  // HG 本地改动：电源锁账本单列一段。查"为什么睡不下去"时先看这个，
+  // 它比 sleep 那段更能说明是谁在拦着。
+  hg::json::Value pmlocks = hg::json::Value::object();
+  EspSystem::pm_lock_report(pmlocks);
+  r.set("pmlocks", pmlocks);
   if (g_parts.motion) {
     int16_t x = 0, y = 0, z = 0;
     g_parts.motion->latest(x, y, z);

@@ -61,11 +61,26 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # CONFIG_RTC_CLK_SRC_INT_RC is not set
 CONFIG_RTC_CLK_SRC_INT_8MD256=y
 
-# HG 本地改动：把"连续空闲多久才允许进 light sleep"从默认 8 个 tick 提到 200 个
-# （FREERTOS_HZ=1000，即 200 ms）。为什么：实测每次 light sleep 只睡到 9 ms 就被
-# 叫醒，59 分钟里进出 25 万次——进出的固定开销（切时钟源、锁 PLL、保存/恢复上下文、
-# 重配 modem）比真睡那几毫秒省下来的还多。门限抬到 200 ms 后，短于 200 ms 的空闲
-# 窗口不再浪费在进出睡眠上，只有真正闲下来才睡，睡就睡够。
-# Kconfig 原文也建议："if the proportion of rejected sleeps is too high, please
-# increase this value to improve scheduling efficiency"。
-CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=200
+# HG 本地改动：空闲多久才允许进 light sleep。
+# 踩过的坑，按时间顺序记，免得再绕一遍：
+#   1) 默认 8（=8 ms，HZ=1000）→ 实测每次只睡到 9 ms 就被叫醒，59 分钟进出 25 万次，
+#      进出开销（切时钟源、锁 PLL、保存/恢复上下文、重配 modem）比真睡那几毫秒省下的还多。
+#   2) 抬到 200（=200 ms）→ IDF 的 Mode stats 显示 SLEEP 0%、light_sleep_counts 0，
+#      一次都没睡成：doze 期间主循环等 kDozeWaitMs=100 ms，比 200 ms 门限还短，
+#      窗口永远进不去。抬过头等于把 light sleep 关掉了。
+#   3) 降到 10、甚至 2，USB 上测仍是 0 —— 那是测法问题，不是门限问题：USB 插着时
+#      usb_serial_jtag（CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION）和非 doze 的 hg-awake
+#      两条 NO_LIGHT_SLEEP 锁都常驻，s_mode 根本到不了 PM_MODE_LIGHT_SLEEP，
+#      跟门限毫无关系。要测必须拔线进 doze。
+# 取 50（=50 ms）：doze 期间最短的等待是触摸任务的 kDozePollMs=120 ms，
+# 50 < 120 能进去；又远大于进出开销，睡一次不亏。
+# 调这个值就看 `diag` 里 pmlocks 的 modes[SLEEP].pct 与 idf_light_sleep_ok /
+# idf_light_sleep_rejected，别看感觉。
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=50
+
+# HG 本地改动：打开 IDF 的电源锁统计（esp_pm_get_lock_stats_all / esp_pm_lock_get_stats）。
+# 为什么需要：我们自己只控得住 hg-awake 这一把锁和 I2S 通道，但只要还有别的组件
+# （Wi-Fi、spi_flash、esp_timer、触摸驱动……）持着 ESP_PM_NO_LIGHT_SLEEP 不放，
+# 芯片就睡不下去，而且我们自己写的计数器看不出是谁。开了这个，`diag` 的
+# pmlocks 段会直接报出每一类锁被 acquire 了多少次，不用再靠时序推理。
+CONFIG_PM_PROFILING=y
