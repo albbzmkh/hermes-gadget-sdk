@@ -22,12 +22,16 @@ namespace {
 
 const char* TAG = "hg.touch";
 constexpr uint32_t kPollMs = 20;
-// HG 本地改动：50 ms → 120 ms。StopWatch 的 CST820 没有把 INT 接到 ESP32
-//（b.touch.int_gpio = -1），所以 doze 时这条路径永远是"定时轮询 I2C"，没有任何
-// 唤醒源能提前叫醒它。每次轮询都是一次 100 kHz 的 I2C 事务，会把 CPU 从 light sleep
-// 拉起来。120 ms 下第一次触摸的响应最坏多几十毫秒，但省下的是一整夜的唤醒次数。
-// 有 INT 的板子仍走 kArmedDozeWaitMs 那条更省的路。
-constexpr uint32_t kDozePollMs = 120;
+// HG 本地改动：50 → 120 → 1000 ms。
+// 为什么是 1000：StopWatch 的 CST820 没有把 INT 接到 ESP32（b.touch.int_gpio = -1），
+// 所以 doze 时这条路径只能是"定时轮询 I2C"，没有任何唤醒源能提前叫醒它。每次轮询
+// 都是一次 100 kHz 事务，会把 CPU 从 light sleep 拉起来。而这个任务的等待周期
+// 就是整台机器单次睡眠时长的上限——实测 sleep_ms_max 恰好卡在 120，平均值只有 72，
+// 一半以上的省电机会被它掐掉。
+// 屏黑着的时候触摸本来就该"点一下才醒"，1000 ms 的采样间隔意味着最坏多等一秒，
+// 换来的是一次能睡满 250 ms（主循环 kDozeWaitMs 成为新上限）。有 INT 的板子仍走
+// kArmedDozeWaitMs 那条更省的路，不受这里影响。
+constexpr uint32_t kDozePollMs = 1000;
 // Dozing with INT armed as a wake source: the sleep exit hook and nudge() end the wait, so the
 // task needs no poll of its own and the CPU stays in light sleep between Wi-Fi beacons.
 constexpr uint32_t kArmedDozeWaitMs = 1000;

@@ -277,6 +277,12 @@ class App {
   // 息屏后 CPU 每秒还是要醒 10 次去 WsLink 里 poll 一下心跳和队列。250 ms 下
   // 心跳（60 s 级）和按键（人按得动的速度）都来不及错过，但它让 tickless idle
   // 有更长的连续睡眠窗口。有事件进来时 receive() 会立即返回，不受此限制。
+  // HG 本地改动：doze 时主循环等事件的上限。
+  // 曾经为了"息屏后单击蓝/黄键没反应"降到 30（主循环 30 ms 一圈，按键 2 圈防抖
+  // 就够 60 ms，单击能落进采样窗口）。但那等于把单次睡眠上限从 250 ms 砍到 30 ms，
+  // 而进出 light sleep 的开销是固定的——真正该做的是让按键不再依赖主循环轮询，
+  // 改用 GPIO 唤醒源（见 port_buttons.cpp 的 begin()）。按键交给中断以后，
+  // 这里就能安心回到 250，让 CPU 一次睡满。
   static constexpr uint32_t kDozeWaitMs = 250;
   // The longest recording; the recording buffer holds this much (RecordingBuffer::bytes_for).
   static constexpr uint32_t kMaxUtteranceMs = 30000;
