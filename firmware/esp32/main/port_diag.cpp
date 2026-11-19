@@ -171,6 +171,22 @@ void begin() {
 
 void set_parts(const Parts& parts) { g_parts = parts; }
 
+// HG 本地改动：把"这次上电以来睡了多少"打进 diag 报告。
+// 为什么需要它：验证省电必须拔掉 USB 用电池跑，一拔串口就没了，那行
+// "awake after ... light sleep N%" 只能在拔线前看到。这里留个总账，
+// 插回电脑敲 `diag` 就能核对这一整块电池里 CPU 到底睡了多少。
+hg::json::Value sleep_report() {
+  const EspSystem::SleepTally t = EspSystem::sleep_tally();
+  hg::json::Value r = hg::json::Value::object();
+  r.set("dozes", t.dozes)
+      .set("doze_s", t.doze_s)
+      .set("light_sleep_s", t.sleep_s)
+      .set("wakeups", t.wakeups)
+      .set("last_percent", t.last_percent)
+      .set("percent", t.doze_s ? static_cast<int>(static_cast<uint64_t>(t.sleep_s) * 100 / t.doze_s) : 0);
+  return r;
+}
+
 void log_boot_summary() {
   const esp_app_desc_t* app = esp_app_get_description();
   ESP_LOGI(TAG, "reset reason: %s; built %s %s with ESP-IDF %s", reset_reason(), app->date, app->time,
@@ -205,7 +221,8 @@ void report(hg::json::Value& r) {
       .set("wifi", wifi())
       .set("parts", parts)
       .set("i2c", i2c_scan())
-      .set("stacks", stacks());
+      .set("stacks", stacks())
+      .set("sleep", sleep_report());
   if (g_parts.motion) {
     int16_t x = 0, y = 0, z = 0;
     g_parts.motion->latest(x, y, z);

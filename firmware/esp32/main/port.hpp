@@ -148,6 +148,21 @@ class EspSystem final : public hg::System {
   bool enable_doze();
   void set_dozing(bool dozing) override;
   static bool dozing_now();  // for tasks that poll: poll less while dozing
+
+  // HG 本地改动：把"这次上电以来睡了多少"累计起来，供 `diag sleep` 事后查询。
+  // 为什么需要它：验证省电必须拔掉 USB 用电池跑，可一拔就没有串口了，
+  // 那行 "awake after ... light sleep N%" 只能在拔线前看到。这套计数在
+  // 每次 doze 结束时累加，`diag sleep` 把总账打出来，插回电脑再看即可。
+  // 不走 NVS：上电清零正好对应"这一次电池能撑多久"，而 NVS 写入本身
+  // 要擦 flash，放这儿得不偿失。
+  struct SleepTally {
+    uint32_t doze_s = 0;    // time spent in doze, light sleep or not
+    uint32_t sleep_s = 0;   // time actually in light sleep
+    uint32_t wakeups = 0;   // light-sleep exits
+    uint16_t dozes = 0;     // doze periods
+    uint8_t last_percent = 0;
+  };
+  static SleepTally sleep_tally();
   // A lock holds the chip out of light sleep even while dozing (a Wi-Fi join attempt).
   // A task that relies on light-sleep wakes then keeps its awake path instead.
   static void set_sleep_held(bool held);
@@ -978,6 +993,9 @@ void log_boot_summary();
 void report(hg::json::Value& r);
 // The log copy, oldest line first (hg::App::recent_log).
 std::string recent_log();
+// HG 本地改动：本次上电以来的睡眠账目，挂在 `diag` 报告的 sleep 字段上。
+// 见 EspSystem::SleepTally 的说明——拔线测省电时串口看不到，事后插回来核对。
+hg::json::Value sleep_report();
 }  // namespace diag
 
 }  // namespace hgp

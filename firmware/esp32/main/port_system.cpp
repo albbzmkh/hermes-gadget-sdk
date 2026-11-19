@@ -52,6 +52,14 @@ namespace {
 std::atomic<int64_t> g_slept_us{0};
 std::atomic<uint32_t> g_sleeps{0};
 std::atomic<bool> g_dozing{false};
+// HG 本地改动：本次上电以来的累计（见 port.hpp 的 SleepTally 说明）。
+// 为什么不用 NVS：上电清零正好对应"这一块电池能撑多久"，而 NVS 写入要擦 flash，
+// 为了记一行统计去磨损 flash、还多一次唤醒，不值。
+int64_t g_total_doze_us = 0;
+int64_t g_total_sleep_us = 0;
+uint32_t g_total_wakeups = 0;
+uint16_t g_total_dozes = 0;
+uint8_t g_last_percent = 0;
 
 #if CONFIG_PM_LIGHT_SLEEP_CALLBACKS
 esp_err_t count_sleep(int64_t slept_us, void*) {
@@ -112,9 +120,25 @@ void EspSystem::set_dozing(bool dozing) {
   if (on_doze_end) on_doze_end();
   const int64_t dozed_ms = (esp_timer_get_time() - doze_started_us_) / 1000;
   const int64_t slept_ms = g_slept_us.load() / 1000;
+  g_last_percent = dozed_ms > 0 ? static_cast<uint8_t>(slept_ms * 100 / dozed_ms) : 0;
+  // HG 本地改动：累加进总账，`diag sleep` 事后取。
+  g_total_doze_us += (esp_timer_get_time() - doze_started_us_);
+  g_total_sleep_us += g_slept_us.load();
+  g_total_wakeups += g_sleeps.load();
+  if (g_total_dozes < 0xFFFF) ++g_total_dozes;
   ESP_LOGI("hg.power", "awake after %lld s dozing: light sleep %lld s (%d%%), %u wake-ups", dozed_ms / 1000,
-           slept_ms / 1000, dozed_ms > 0 ? static_cast<int>(slept_ms * 100 / dozed_ms) : 0,
-           static_cast<unsigned>(g_sleeps.load()));
+           slept_ms / 1000, static_cast<int>(g_last_percent), static_cast<unsigned>(g_sleeps.load()));
+}
+
+// HG 本地改动：把累计的睡眠账目交出去，给 `diag sleep` 用。
+EspSystem::SleepTally EspSystem::sleep_tally() {
+  SleepTally t;
+  t.doze_s = static_cast<uint32_t>(g_total_doze_us / 1000000);
+  t.sleep_s = static_cast<uint32_t>(g_total_sleep_us / 1000000);
+  t.wakeups = g_total_wakeups;
+  t.dozes = g_total_dozes;
+  t.last_percent = g_last_percent;
+  return t;
 }
 
 bool EspSystem::wall_time(hg::WallTime& out) { return local_wall_time(out); }
