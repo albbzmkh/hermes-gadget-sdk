@@ -161,6 +161,11 @@ class EspSystem final : public hg::System {
     uint32_t wakeups = 0;   // light-sleep exits
     uint16_t dozes = 0;     // doze periods
     uint8_t last_percent = 0;
+    // HG 本地改动：一次 light sleep 的最短/最长/平均时长（微秒）。最短那次最能说明
+    // 有没有高频源在反复戳醒芯片——几百 us 的睡眠等于没睡。
+    uint32_t shortest_sleep_us = 0;
+    uint32_t longest_sleep_us = 0;
+    uint32_t avg_sleep_us = 0;
   };
   static SleepTally sleep_tally();
   // A lock holds the chip out of light sleep even while dozing (a Wi-Fi join attempt).

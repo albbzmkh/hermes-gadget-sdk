@@ -60,11 +60,24 @@ int64_t g_total_sleep_us = 0;
 uint32_t g_total_wakeups = 0;
 uint16_t g_total_dozes = 0;
 uint8_t g_last_percent = 0;
+// HG 本地改动：一次 light sleep 最短能到几百微秒，用 us 记最短的那次最有说服力——
+// 如果最短只有几百 us，说明有高频中断在反复把芯片从睡眠里戳醒。
+int64_t g_shortest_sleep_us = 0;
+int64_t g_longest_sleep_us = 0;
 
 #if CONFIG_PM_LIGHT_SLEEP_CALLBACKS
 esp_err_t count_sleep(int64_t slept_us, void*) {
+  // HG 本地改动：只有真的睡着了才算一次唤醒。
+  // 为什么：IDF 的 pm_impl.c:922 把 exit 回调放在
+  // `if (sleep_time_us >= EXPECTED_IDLE_TIME_BEFORE_SLEEP)` 之外，空闲循环每转
+  // 一圈——哪怕空闲时间太短没进 sleep、或者 esp_light_sleep_start() 被拒绝——
+  // 都会带着 slept_us = 0 调一次。原来的写法把这种"尝试"也计成唤醒，
+  // 实测虚报成 42 万次/96 分钟（约 74 Hz），把真正的唤醒频率完全淹掉了。
+  if (slept_us <= 0) return ESP_OK;
   g_slept_us.fetch_add(slept_us, std::memory_order_relaxed);
   g_sleeps.fetch_add(1, std::memory_order_relaxed);
+  if (g_shortest_sleep_us == 0 || slept_us < g_shortest_sleep_us) g_shortest_sleep_us = slept_us;
+  if (slept_us > g_longest_sleep_us) g_longest_sleep_us = slept_us;
   return ESP_OK;
 }
 #endif
@@ -138,6 +151,9 @@ EspSystem::SleepTally EspSystem::sleep_tally() {
   t.wakeups = g_total_wakeups;
   t.dozes = g_total_dozes;
   t.last_percent = g_last_percent;
+  t.shortest_sleep_us = static_cast<uint32_t>(g_shortest_sleep_us);
+  t.longest_sleep_us = static_cast<uint32_t>(g_longest_sleep_us);
+  t.avg_sleep_us = t.wakeups ? static_cast<uint32_t>(static_cast<uint64_t>(t.sleep_s) * 1000000ull / t.wakeups) : 0;
   return t;
 }
 

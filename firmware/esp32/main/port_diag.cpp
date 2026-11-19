@@ -183,7 +183,10 @@ hg::json::Value sleep_report() {
       .set("light_sleep_s", t.sleep_s)
       .set("wakeups", t.wakeups)
       .set("last_percent", t.last_percent)
-      .set("percent", t.doze_s ? static_cast<int>(static_cast<uint64_t>(t.sleep_s) * 100 / t.doze_s) : 0);
+      .set("percent", t.doze_s ? static_cast<int>(static_cast<uint64_t>(t.sleep_s) * 100 / t.doze_s) : 0)
+      .set("sleep_ms_avg", static_cast<int>(t.avg_sleep_us / 1000))
+      .set("sleep_ms_min", static_cast<int>(t.shortest_sleep_us / 1000))
+      .set("sleep_ms_max", static_cast<int>(t.longest_sleep_us / 1000));
   return r;
 }
 
