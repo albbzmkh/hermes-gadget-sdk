@@ -60,3 +60,12 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # 默认 150 kHz 的 RC 漂得少，beacon 对齐更准，也就少醒几次。
 # CONFIG_RTC_CLK_SRC_INT_RC is not set
 CONFIG_RTC_CLK_SRC_INT_8MD256=y
+
+# HG 本地改动：把"连续空闲多久才允许进 light sleep"从默认 8 个 tick 提到 200 个
+# （FREERTOS_HZ=1000，即 200 ms）。为什么：实测每次 light sleep 只睡到 9 ms 就被
+# 叫醒，59 分钟里进出 25 万次——进出的固定开销（切时钟源、锁 PLL、保存/恢复上下文、
+# 重配 modem）比真睡那几毫秒省下来的还多。门限抬到 200 ms 后，短于 200 ms 的空闲
+# 窗口不再浪费在进出睡眠上，只有真正闲下来才睡，睡就睡够。
+# Kconfig 原文也建议："if the proportion of rejected sleeps is too high, please
+# increase this value to improve scheduling efficiency"。
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=200

@@ -166,6 +166,9 @@ class EspSystem final : public hg::System {
     uint32_t shortest_sleep_us = 0;
     uint32_t longest_sleep_us = 0;
     uint32_t avg_sleep_us = 0;
+    // HG 本地改动：想睡但没睡成的次数。和 wakeups 一比就知道有多少入睡窗口
+    // 被别的任务/中断抢走了——这个数大而 wakeups 小，说明是软件在占着 CPU。
+    uint32_t refused = 0;
   };
   static SleepTally sleep_tally();
   // A lock holds the chip out of light sleep even while dozing (a Wi-Fi join attempt).

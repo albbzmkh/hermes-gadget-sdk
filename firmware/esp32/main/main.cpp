@@ -757,6 +757,8 @@ extern "C" void app_main(void) {
   TickType_t motion_at = 0;     // last motion poll (the loop runs at ~10 ms)
   uint32_t motion_samples = 0;  // the motion task's count at the last forwarded sample
 #endif
+  // HG 本地改动：doze 时整段轮询的间隔。见循环里 poll_deep 的说明。
+  constexpr uint32_t kDozePollMs = 1000;
 
   for (;;) {
     hgp::Event ev;
@@ -783,20 +785,36 @@ extern "C" void app_main(void) {
       vTaskDelay(pdMS_TO_TICKS(100));  // let the log line out
       esp_restart();
     }
+    // HG 本地改动：doze 时把这一整段轮询降到 1 秒一次。
+    // 为什么：主循环每一圈都要跑 g_buttons / g_wifi / app.tick 等一串调用，
+    // 只要其中任何一个每 10 ms 醒一次，CPU 就永远攒不出超过 10 ms 的连续空闲，
+    // light sleep 只能睡 9 ms 进出一次（实测 59 分钟 25 万次），进出开销比省下的还多。
+    // doze 时没有录音、没有回复、屏幕也黑着，这些轮询按秒级完全够用；
+    // 真正的唤醒路径是事件（触摸、按键、网络、电源），receive() 会立刻返回。
+    // 电源键仍然单独按 kDozeWaitMs 的节拍走（见下），因为它要能随时把屏幕叫亮。
+    const uint32_t now_loop = g_system.now_ms();
+    static uint32_t doze_polled_at = 0;
+    const bool doze_now = app.dozing();
+    const bool poll_deep = !doze_now || now_loop - doze_polled_at >= kDozePollMs;
+    if (poll_deep) doze_polled_at = now_loop;
+
     g_buttons.poll(app);
 #if CONFIG_HG_BOARD_M5STACK_STOPWATCH
     // Short red press toggles the display; a 1.5 s hold opens/closes Settings.
-    g_m5pm1_power.poll(app, g_system.now_ms());
+    // 红键必须随时响应：它既是唤醒源，也是长按开设置的入口，所以不吃 poll_deep。
+    g_m5pm1_power.poll(app, now_loop);
 #endif
 #if CONFIG_HG_BOARD_CARDPUTER_ADV
     if (hal.display == &g_compose) g_keyboard.poll(app, g_compose);
 #endif
-    g_wifi.tick(app, g_system.now_ms());
+    if (poll_deep) {
+      g_wifi.tick(app, now_loop);
 #if !CONFIG_HG_BOARD_ESP32_CYD
-    g_tailnet.tick(g_system.now_ms());
+      g_tailnet.tick(now_loop);
 #endif
-    if (g_gestures) g_gestures->tick(g_system.now_ms());
-    app.tick();
+      if (g_gestures) g_gestures->tick(now_loop);
+      app.tick();
+    }
 #if CONFIG_HG_BOARD_CORES3
     // The camera pipeline's lifecycle: start when the camera mode opens, stop
     // when it leaves, and stop 60 s after the last capture (the mode, when a

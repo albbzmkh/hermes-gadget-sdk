@@ -64,6 +64,10 @@ uint8_t g_last_percent = 0;
 // 如果最短只有几百 us，说明有高频中断在反复把芯片从睡眠里戳醒。
 int64_t g_shortest_sleep_us = 0;
 int64_t g_longest_sleep_us = 0;
+// HG 本地改动：被拒绝的入睡尝试。IDF 只在 slept_us > 0 时算真睡，但回调无论
+// 成功失败都会被调，所以 slept_us == 0 的次数就是"想睡没睡成"的次数。
+// 拿它和真睡次数一比，就知道有多少机会被别的东西抢走了。
+uint32_t g_refused_sleeps = 0;
 
 #if CONFIG_PM_LIGHT_SLEEP_CALLBACKS
 esp_err_t count_sleep(int64_t slept_us, void*) {
@@ -73,7 +77,10 @@ esp_err_t count_sleep(int64_t slept_us, void*) {
   // 一圈——哪怕空闲时间太短没进 sleep、或者 esp_light_sleep_start() 被拒绝——
   // 都会带着 slept_us = 0 调一次。原来的写法把这种"尝试"也计成唤醒，
   // 实测虚报成 42 万次/96 分钟（约 74 Hz），把真正的唤醒频率完全淹掉了。
-  if (slept_us <= 0) return ESP_OK;
+  if (slept_us <= 0) {
+    ++g_refused_sleeps;
+    return ESP_OK;
+  }
   g_slept_us.fetch_add(slept_us, std::memory_order_relaxed);
   g_sleeps.fetch_add(1, std::memory_order_relaxed);
   if (g_shortest_sleep_us == 0 || slept_us < g_shortest_sleep_us) g_shortest_sleep_us = slept_us;
@@ -154,6 +161,7 @@ EspSystem::SleepTally EspSystem::sleep_tally() {
   t.shortest_sleep_us = static_cast<uint32_t>(g_shortest_sleep_us);
   t.longest_sleep_us = static_cast<uint32_t>(g_longest_sleep_us);
   t.avg_sleep_us = t.wakeups ? static_cast<uint32_t>(static_cast<uint64_t>(t.sleep_s) * 1000000ull / t.wakeups) : 0;
+  t.refused = g_refused_sleeps;
   return t;
 }
 
