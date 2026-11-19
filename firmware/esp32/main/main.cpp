@@ -536,7 +536,7 @@ extern "C" void app_main(void) {
   if (board.codec.enabled && audio_power && g_codec.begin(board.codec, i2c_bus)) {
     if (g_codec_mic.begin(g_codec.in(), board.codec.rmnm_mics, g_codec.mic_link())) hal.mic = &g_codec_mic;
     g_codec_speaker.es8311_fade_ramp = board.codec.dac_fade_ramp && board.codec.speaker == hgp::SpeakerCodec::Es8311;
-    if (g_codec_speaker.begin(g_codec.out(), board.codec.stereo32, board.codec.speaker_pa ? board.codec.pa : -1)) hal.speaker = &g_codec_speaker;
+    if (g_codec_speaker.begin(g_codec.out(), board.codec.stereo32, board.codec.speaker_pa ? board.codec.pa : -1, &g_codec)) hal.speaker = &g_codec_speaker;
 #if CONFIG_HG_BOARD_M5STACK_STOPWATCH
     // HG 本地改动：这块板是 ES8311 双向共用（mic 和 speaker 是同一个 handle），
     // mic_link().switchable 因此是 false，上游那行 allow_power_down 从来没执行过，

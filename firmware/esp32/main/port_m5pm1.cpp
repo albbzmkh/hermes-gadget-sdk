@@ -16,6 +16,22 @@ constexpr char kTag[] = "hg.m5pm1";
 constexpr gpio_num_t kIrqGpio = GPIO_NUM_12;
 
 constexpr uint8_t kRegPowerCfg = 0x06;
+// HG 本地改动：0x06 的电源位与 0x07 的保持位（位定义见 M5PM1.h 的注释）。
+// 0x06: [3] BOOST_EN / [2] LDO_EN / [1] DCDC_EN / [0] CHG_EN
+// 0x07: [5] LDO hold / [4..0] GPIO4..0 hold
+constexpr uint8_t kRegHoldCfg = 0x07;
+constexpr uint8_t kBoostEnable = 1u << 3;
+constexpr uint8_t kLdoEnable = 1u << 2;
+constexpr uint8_t kDcdcEnable = 1u << 1;
+constexpr uint8_t kChargeEnable = 1u << 0;
+constexpr uint8_t kHoldLdo = 1u << 5;
+constexpr uint8_t kHoldGpio1 = 1u << 1;
+// HG 本地改动：明确写出 0x06 的值。BOOST 关（不用 Grove 口），其余三项开。
+constexpr uint8_t kPowerCfgBase = kLdoEnable | kDcdcEnable | kChargeEnable;
+// HG 本地改动：IRQ_MASK1 的 5 个 GPIO 位，写 0 表示全部使能中断。
+constexpr uint8_t kIrqMask1All = 0x1F;
+// HG 本地改动：PMIC 的 I2C 空闲睡眠超时（秒）。0 = 禁用，1..15 有效。
+constexpr uint8_t kI2cSleepSeconds = 2;
 constexpr uint8_t kRegI2cCfg = 0x09;
 constexpr uint8_t kRegWatchdog = 0x0A;
 constexpr uint8_t kRegSystemCommand = 0x0C;
@@ -58,20 +74,34 @@ constexpr uint32_t kDozePollMs = 200;
 
 }  // namespace
 
+// HG 本地改动：失败时重试一次。
+// 为什么需要：上面把 0x09 的 I2C 空闲睡眠打开了（kI2cSleepSeconds）。厂商文档写明
+// PMIC 睡着后**第一次 I2C 事务只用来唤醒、该次会失败**，第二次才有效。这里补一次
+// 重试，把这一次预期内的失败吃掉，调用方就不用到处判断"这次失败是不是正常的"。
+// 额外的好处：M5PM1 的 IRQ 是开漏，总线偶尔被拉低时也能自己恢复。
 bool M5PM1Power::read8(uint8_t reg, uint8_t& value) {
-  return dev_ && i2c_master_transmit_receive(dev_, &reg, 1, &value, 1, 50) == ESP_OK;
+  if (!dev_) return false;
+  if (i2c_master_transmit_receive(dev_, &reg, 1, &value, 1, 50) == ESP_OK) return true;
+  return i2c_master_transmit_receive(dev_, &reg, 1, &value, 1, 50) == ESP_OK;
 }
 
 bool M5PM1Power::read16(uint8_t reg, uint16_t& value) {
+  if (!dev_) return false;
   uint8_t data[2]{};
-  if (!dev_ || i2c_master_transmit_receive(dev_, &reg, 1, data, sizeof(data), 50) != ESP_OK) return false;
+  if (i2c_master_transmit_receive(dev_, &reg, 1, data, sizeof(data), 50) != ESP_OK) {
+    // 同上：PMIC 刚被上一条事务唤醒时这一读会失败，再试一次。
+    if (i2c_master_transmit_receive(dev_, &reg, 1, data, sizeof(data), 50) != ESP_OK) return false;
+  }
   value = static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
   return true;
 }
 
 bool M5PM1Power::write8(uint8_t reg, uint8_t value) {
+  if (!dev_) return false;
   const uint8_t data[] = {reg, value};
-  return dev_ && i2c_master_transmit(dev_, data, sizeof(data), 50) == ESP_OK;
+  if (i2c_master_transmit(dev_, data, sizeof(data), 50) == ESP_OK) return true;
+  // 同上：写入同样会撞上"唤醒事务"，重发一次即可（M5PM1 的寄存器写是幂等的）。
+  return i2c_master_transmit(dev_, data, sizeof(data), 50) == ESP_OK;
 }
 
 bool M5PM1Power::update8(uint8_t reg, uint8_t mask, uint8_t value) {
@@ -103,11 +133,23 @@ bool M5PM1Power::begin(i2c_master_bus_handle_t bus) {
   // The PMIC keeps configuration over an ESP32 reset. Restore known-safe key
   // behavior on every boot: no single-click reset, software hold at 1.5 s,
   // and the PMIC's emergency long action delayed to 4 s.
-  bool ok = write8(kRegI2cCfg, 0) && write8(kRegWatchdog, 0);
+  //
+  // HG 本地改动：0x09 原来写 0，把 PMIC 自己的 I2C 空闲睡眠禁用了。
+  // 头文件对 0x09 [3:0] SLP_TO 的定义是"I2C空闲超时(秒)，0=禁用，超时后PM1进入睡眠模式"。
+  // 这块板待机时 PMIC 是唯一常驻带电的芯片（L0 级，电池直连），它自身不睡就是
+  // 白白的静息电流。改成 2 秒：正常轮询（20 ms 一次按键、5 s 一次电池）远密于 2 s，
+  // 它根本来不及睡；只有真进 doze、轮询降到 1 s 一次时才会睡下去。
+  // 代价按厂商文档：PMIC 睡后第一次 I2C 只用来唤醒、该次事务会失败。所以把
+  // read8/write8 改成失败重试一次（见那两个函数），把这一次失败吃掉。
+  bool ok = write8(kRegI2cCfg, kI2cSleepSeconds) && write8(kRegWatchdog, 0);
   ok = ok && update8(kRegButtonCfg1,
                      kSingleResetDisable | kClickDelayMask | kLongDelayMask | kDoubleDelayMask,
                      kSingleResetDisable | kLongDelay4s | kDoubleDelay250ms);
-  ok = ok && update8(kRegIrqMask1, 0x1F, 0x1F);
+  // HG 本地改动：0x43 (IRQ_MASK1) 的位语义和 0x45 相反——头文件写的是
+  // "[4:0] 每bit: 0=使能中断 1=屏蔽中断"。原来写 0x1F 等于把 GPIO0-4 五路中断
+  // 全部屏蔽（而 0x16 又把 GPIO1 设成 IRQ 功能，等于配了却发不出来）。
+  // 这里改成写 0：全部使能。GPIO1 是 PMIC 侧那根 IRQ 输出，对应 ESP32 的 GPIO12。
+  ok = ok && update8(kRegIrqMask1, kIrqMask1All, 0);
   ok = ok && update8(kRegIrqMask2, 0x3F, 0x3F);
   // HG 本地改动：0x45（按钮中断屏蔽）的语义和其它屏蔽寄存器相反——库的
   // irqSetBtnMask() 里 ENABLE 是"置位"、DISABLE 是"清位"，所以要把 0x07 三位
@@ -122,6 +164,25 @@ bool M5PM1Power::begin(i2c_master_bus_handle_t bus) {
   // burns the 250 mAh cell, so drive it dark from the start. M5Stack's own
   // display HAL does the same (hal_display.cpp display_init()).
   if (update8(kRegPowerCfg, kPowerLed, 0)) led_on_ = false;
+
+  // HG 本地改动：显式写出 0x06 的电源位，不再依赖上电残留。
+  // 头文件 0x06 的位： [3] BOOST_EN 5VINOUT升压 / [2] LDO_EN 3.3V / [1] DCDC_EN 5V DCDC / [0] CHG_EN 充电。
+  // 这一位为什么不读-改-写就别动：0x06 的 [0] CHG_EN 注释写"下载模式或复位事件时自动清零"，
+  // 说明这个寄存器在复位后是已知的干净状态，而不是需要保留的现场值。
+  // BOOST 关掉的理由：用户确认不用 Grove 口。电池供电时它会一直把电池升到 5 V
+  // 送到 5VINOUT 上，那里什么都不接，纯属空转耗电。
+  // LDO/DCDC/CHG 保持开启：3.3 V 轨是 ESP32-S3 自己（以及 I2C 上的 M5IOE1/M5PM1 外设）
+  // 的电源，5 V DCDC 是 AMOLED 与音频功放的输入；充电使能插着 USB 时要给电池充。
+  ok = ok && write8(kRegPowerCfg, kPowerCfgBase);
+  led_on_ = false;
+
+  // HG 本地改动：建立 3.3 V LDO 的电源保持，然后才允许 PMIC 进自己的睡眠。
+  // 0x07 HOLD_CFG 的注释写得很明白："复位/下载模式/关机时自动清零为0x00"。
+  // 我们从没写过它，所以复位之后 [5] LDO(3.3V)电源保持 = 0；而上面刚把 0x09 的
+  // I2C 睡眠打开——如果不先建立 hold，PMIC 一睡，3.3 V 轨可能跟着掉，设备就醒不过来。
+  // 顺序是硬要求：先 hold，再睡。这里只有一个 GPIO 保持位需要顾及：[1] GPIO1，
+  // 那是 IRQ 输出，必须保住电平，否则 ESP32 侧的 GPIO12 会悬空。
+  ok = ok && update8(kRegHoldCfg, kHoldLdo | kHoldGpio1, kHoldLdo | kHoldGpio1);
 
   bool down = false;
   if (!ok || !key_pressed(down)) {
@@ -255,8 +316,10 @@ std::optional<bool> M5PM1Power::external_power() {
 
 bool M5PM1Power::power_off() {
   ESP_LOGI(kTag, "requesting M5PM1 shutdown");
-  // Keep the LED off if USB continues to power the board.
-  update8(kRegPowerCfg, kPowerLed, 0);
+  // HG 本地改动：这里原来是 update8（读-改-写），会把当前 0x06 里的一切原样保留。
+  // 现在 0x06 由 kPowerCfgBase 显式定义（BOOST 关、LDO/DCDC/CHG 开），关机前
+  // 也照这个值写一次，避免残留上一次的 BOOST 状态。LED 位清 0。
+  write8(kRegPowerCfg, kPowerCfgBase);
   return write8(kRegSystemCommand, kShutdown);
 }
 
@@ -266,7 +329,8 @@ void M5PM1Power::set_power_led(bool on) {
   // worth lighting when the panel is dark — M5Stack's own hal_display.cpp
   // keeps it off while brightness is above zero for exactly that reason.
   if (!dev_ || led_on_ == on) return;
-  if (!update8(kRegPowerCfg, kPowerLed, on ? kPowerLed : 0)) return;
+  // HG 本地改动：同上，以 kPowerCfgBase 为底，只叠加 LED 位，不再读当前值。
+  if (!write8(kRegPowerCfg, static_cast<uint8_t>(kPowerCfgBase | (on ? kPowerLed : 0)))) return;
   led_on_ = on;
   ESP_LOGI(kTag, "power LED %s", on ? "on" : "off");
 }

@@ -87,15 +87,36 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
     ESP_LOGE(TAG, "I2S setup failed");
     return false;
   }
-  i2s_channel_enable(tx_);
-  i2s_channel_enable(rx_);
-
+  // HG 本地改动：这里原来无条件 i2s_channel_enable(tx_); i2s_channel_enable(rx_);
+  // 两条通道一开就一直开着。ESP-IDF 官方 Power Management 文档写明 I2S 驱动在
+  // enable() 到 disable() 之间持续持有 ESP_PM_NO_LIGHT_SLEEP 锁，所以那样等于
+  // 永久禁止 light sleep。现在由 apply_audio_channels() 按需开关（见本函数后半段），
+  // 真正打开由录音任务、放音任务和睡眠门三方共同触发。
+  // HG 本地改动：两条通道先各打开一次，再交给 esp_codec_dev 自己接管。
+  // 为什么必须先开：esp_codec_dev_open() 会调 data_if->set_fmt()，其内部
+  // set_fs()（audio_codec_data_i2s.c:422-427）在 rx 是 slave 时会
+  // "_i2s_drv_enable(paired=tx, true, false)" 先把 tx 关掉、改完时钟再开回来。
+  // 这条 tx 如果从没被 enable 过，就会打出
+  //   E i2s_common: i2s_channel_disable(1516): the channel has not been enabled yet
+  // 上游固件之所以没这个报错，正是因为它在这里无条件 enable 了 tx 和 rx。
+  // 我们保留这个"先开一次"只为满足 open() 的前提；真正的省电在于紧接着
+  // 由放音/录音任务把通道关回去（见 apply_audio_channels 的第一次同步）。
+  if (tx_) { if (i2s_channel_enable(tx_) == ESP_OK) tx_enabled_ = true; }
+  if (rx_) { if (i2s_channel_enable(rx_) == ESP_OK) rx_enabled_ = true; }
   audio_codec_i2s_cfg_t i2s_cfg = {};
   i2s_cfg.port = I2S_NUM_1;
   i2s_cfg.rx_handle = rx_;
   i2s_cfg.tx_handle = tx_;
   const audio_codec_data_if_t* data_if = audio_codec_new_i2s_data(&i2s_cfg);
   const audio_codec_gpio_if_t* gpio_if = audio_codec_new_gpio();
+  // HG 本地改动：这里不再抢先 enable 两条通道。
+  // esp_codec_dev_open() 会先调 data_if->set_fmt()（音频数据层内部先把两条通道
+  // disable 掉再接新格式），再调 data_if->enable() 把需要的方向打开。如果我们
+  // 在 open 之前就把通道开起来，那两次 disable 会因为驱动自己的
+  // out_enable/in_enable 状态表还不知道通道已开而打出
+  // "i2s_channel_disable: the channel has not been enabled yet" 的报错。
+  // 所以这里什么都不做：通道由 esp_codec_dev 在 open() 里打开，我们只在 close/
+  // 静音之后按需关掉（见 apply_audio_channels 与 hold_audio_off）。
 
   audio_codec_i2c_cfg_t dac_i2c = {};
   dac_i2c.port = I2C_NUM_0;
@@ -183,9 +204,62 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
   }
   if (in_) esp_codec_dev_set_in_gain(in_, cfg.mic_gain_db);
   mic_link_ = {in_ && in_ != out_, rx_, fs, cfg.mic_gain_db};
+  mic_link_.owner = this;  // HG: mic 任务通过它开关 rx 通道
+  // HG 本地改动：把"每条方向有没有任务会重开它"登记进去。以后 CodecMic /
+  // CodecSpeaker 建任务时还会再各自登记一次，这里先把能确定的说清楚：
+  //   * 有 in_ 就说明有麦克风任务（CodecMic 一定会被 begin），rx 有人管；
+  //   * 有 out_ 就说明有放音设备，CodecSpeaker 会在 begin() 里建任务，tx 有人管。
+  // 两边都没有的板子根本不会走到这里（begin 失败返回）。
+  bind_tasks(out_ != nullptr, in_ != nullptr);
   ESP_LOGI(TAG, "codecs: speaker %s, microphones %s (%s)", out_ ? "ready" : "missing", in_ ? "ready" : "missing",
            shared ? "es8311 analog" : "es7210");
   return out_ || in_;
+}
+
+// --------------------------------------------------------------------------
+// I2S 通道门控（HG 本地改动）
+
+void CodecAudio::apply_audio_channels() {
+  // 睡眠门压过一切：audio_hold_ 大于 0 时两个方向都必须关。
+  // 有任务负责的方向按"该方向是否被需要"决定；没有任务负责的方向（没接麦克风、
+  // 或者根本没有放音任务）一律保持关闭，因为关掉就再也没人会重开。
+  const bool want_tx = audio_hold_ == 0 && spk_wants_ && tx_bound_;
+  const bool want_rx = audio_hold_ == 0 && mic_wants_ && rx_bound_;
+  // 先开 rx 再开 tx：ESP-IDF 的双向 I2S 里 rx 会自己切到 slave，两条同时开时
+  // 顺序决定了谁做主，先 rx 与上游"两条一起 enable"的最终状态一致。
+  if (rx_ && want_rx != rx_enabled_) {
+    const esp_err_t err = want_rx ? i2s_channel_enable(rx_) : i2s_channel_disable(rx_);
+    if (err == ESP_OK) rx_enabled_ = want_rx;
+  }
+  if (tx_ && want_tx != tx_enabled_) {
+    const esp_err_t err = want_tx ? i2s_channel_enable(tx_) : i2s_channel_disable(tx_);
+    if (err == ESP_OK) tx_enabled_ = want_tx;
+  }
+  // HG 本地改动：把这个状态同步给 mic 任务。共用编解码器的 MicPower 是"一直读"，
+  // 通道关着的时候再读只会刷错误日志，所以让它知道什么时候该读。
+  if (mic_link_.rx_ok != rx_enabled_) {
+    mic_link_.rx_ok = rx_enabled_;
+    ESP_LOGI(TAG, "i2s gate: rx %s (hold %d, mic wants %d)", rx_enabled_ ? "on" : "off", audio_hold_, (int)mic_wants_);
+  }
+}
+
+void CodecAudio::set_want_tx(bool wanted) {
+  spk_wants_ = wanted;
+  apply_audio_channels();
+}
+
+void CodecAudio::set_want_rx(bool wanted) {
+  mic_wants_ = wanted;
+  apply_audio_channels();
+}
+
+void CodecAudio::hold_audio_off(bool off) {
+  if (off) {
+    ++audio_hold_;
+  } else if (audio_hold_ > 0) {
+    --audio_hold_;
+  }
+  apply_audio_channels();
 }
 
 // --------------------------------------------------------------------------
@@ -195,6 +269,8 @@ bool CodecMic::begin(esp_codec_dev_handle_t dev, bool rmnm, const CodecAudio::Mi
   if (!dev) return false;
   dev_ = dev;
   link_ = link;
+  // HG 本地改动：MicLink 里带上 CodecAudio 的指针，mic 任务才能按需开关 rx 通道。
+  audio_ = link.owner;
   rmnm_ = rmnm;
   if (rmnm) {
     raw_ = static_cast<int16_t*>(heap_caps_malloc(kMicChunk * 4 * sizeof(int16_t), MALLOC_CAP_8BIT));
@@ -246,20 +322,51 @@ void CodecMic::task(void* arg) {
       if (mic->rmnm_) hg::ws185_mono(mic->raw_, chunk, kMicChunk);
       return true;
     }
+    // HG 本地改动：rx 通道现在由本文件的门控按需开关，闲时是关着的。
+    // MicPower 对"共享编解码器"（switchable_ == false）的设计是让它一直读——
+    // 但那种读法在通道关闭后会每 20 ms 打一条
+    //   E i2s_common: i2s_channel_read: The channel is not enabled
+    // 所以给它一个"这条通道现在能不能读"的旁路：不能读就当这一轮什么都没发生，
+    // 既不报错也不阻塞（MicPower 随后会调 wait() 等下一次唤醒）。
+    // 注意问的是 owner 的实时状态，不是 mic->link_ 里那份快照：那份快照是
+    // begin() 那一刻拍的，门控之后把它改成 off 的话，拷贝里还是 on。
+    bool read_ready() const { return !mic->link_.rx || !mic->audio_ || mic->audio_->rx_live(); }
     void deliver(const int16_t* chunk) { events::post(EventType::Mic, chunk, kMicChunk * sizeof(int16_t)); }
     void wait() { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)); }
     void pause() { vTaskDelay(pdMS_TO_TICKS(10)); }
   } ops{self};
   hg::MicPower power(self->link_.switchable);
-  for (;;) power.turn(self->capturing_.load(), ops, pcm);
+  // HG 本地改动：录音期间打开 rx 通道，空闲时关掉，让 I2S 交还 ESP_PM_NO_LIGHT_SLEEP。
+  // 放在这里而不是 MicPower 里，是因为 MicPower 是 host 侧可测的纯逻辑，
+  // 不应该知道 I2S 的存在；而且 link_.rx 只在 esp32 侧有效。
+  bool rx_on = false;
+  // HG 本地改动：第一次循环无条件同步一次（rx_on 初值设为"与实际相反"），
+  // 这样开机时 rx 会被显式关掉一次，把 esp_codec_dev_open() 里打开的通道交还给
+  // 电源管理——light sleep 才不会被 I2S 的 ESP_PM_NO_LIGHT_SLEEP 锁永久挡住。
+  for (;;) {
+    const bool capturing = self->capturing_.load();
+    if (self->link_.rx && capturing != rx_on) {
+      self->audio_->set_want_rx(capturing);
+      rx_on = capturing;
+    }
+    // HG 本地改动：rx 关着的时候不驱动 MicPower 的去读分支。
+    // 共用编解码器（ES8311）的 MicPower 认为 ADC 一直开着、可以一直读；
+    // 现在通道由门控管，关着时读只会报错。这里直接等下一次唤醒。
+    if (!ops.read_ready()) {
+      ops.wait();
+      continue;
+    }
+    power.turn(capturing, ops, pcm);
+  }
 }
 
 // --------------------------------------------------------------------------
 // Speaker
 
-bool CodecSpeaker::begin(esp_codec_dev_handle_t dev, bool stereo32, int pa) {
+bool CodecSpeaker::begin(esp_codec_dev_handle_t dev, bool stereo32, int pa, CodecAudio* audio) {
   if (!dev) return false;
   dev_ = dev;
+  audio_ = audio;
   uint8_t* storage = static_cast<uint8_t*>(heap_caps_malloc(kSpeakerBuffer + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   static StaticStreamBuffer_t control;
   if (storage) buffer_ = xStreamBufferCreateStatic(kSpeakerBuffer, 1, storage, &control);
@@ -281,6 +388,7 @@ bool CodecSpeaker::begin(esp_codec_dev_handle_t dev, bool stereo32, int pa) {
     if (!stereo_) return false;
   }
   xTaskCreate(&CodecSpeaker::task, "hg-spk", 4096, this, 7, &task_);
+  if (audio_) audio_->bind_tasks(true, false);  // HG: tx 从此有任务管，可以收门
   return true;
 }
 
@@ -377,6 +485,11 @@ void CodecSpeaker::task(void* arg) {
   int64_t stream_t0 = 0;
   uint64_t stream_bytes = 0;
   hg::SpeakerUnderruns gaps;
+  // HG 本地改动：放音任务一开始就把 tx 门关掉（bind_tasks 已登记 tx 归它管）。
+  // esp_codec_dev_open() 在 begin 阶段已经打开过 tx，那条通道会一直握着
+  // ESP_PM_NO_LIGHT_SLEEP 让芯片睡不下去；这里显式收回，等到真要放音时
+  // 下面的 set_want_tx(true) 再打开。
+  if (self->audio_) self->audio_->set_want_tx(false);
   for (;;) {
     if (self->flush_) {
       stream_t0 = 0;
@@ -430,6 +543,9 @@ void CodecSpeaker::task(void* arg) {
         self->draining_ = false;  // busy() stays true until the tail is played and muted
         if (errs) ESP_LOGW(TAG, "spk tail drain: %d/3 writes failed (rc of first=%d), tail may clip", errs, first_rc);
         if (pa) pa->disable();
+        // HG 本地改动：音频尾巴送完、静音之后才关 tx 通道，让 I2S 交还
+        // ESP_PM_NO_LIGHT_SLEEP 锁。必须在静音之后，否则最后一个音节会被截断。
+        if (self->audio_) self->audio_->set_want_tx(false);
         // One line per finished stream: underruns (speaker_underruns.hpp), then
         // what played and what overflowed. ~1.00x means it played in real time.
         const auto t = gaps.finish();
@@ -464,6 +580,9 @@ void CodecSpeaker::task(void* arg) {
         if (!pa->enable(generation)) continue;
         vTaskDelay(pdMS_TO_TICKS(20));  // PA settles while the DAC is still muted
       }
+      // HG 本地改动：真正有音频要放了才打开 tx 通道。放在 mute 之前，
+      // 这样 I2S 一开始出时钟，ES8311 就已经准备好了。
+      if (self->audio_) self->audio_->set_want_tx(true);
       esp_codec_dev_set_out_mute(self->dev_, false);
       playing = true;
     } else if (pa && !pa->enable(generation)) {

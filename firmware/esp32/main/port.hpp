@@ -517,13 +517,57 @@ class CodecAudio {
     i2s_chan_handle_t rx = nullptr;
     esp_codec_dev_sample_info_t format = {};
     float gain_db = 0;
+    // HG 本地改动：mic 任务要能按需开关 rx 通道，得有一个回到 CodecAudio 的指针。
+    // 放在 MicLink 里而不是另开参数，是因为 MicLink 本来就是"给 mic 用的那份拷贝"。
+    CodecAudio* owner = nullptr;
+    // HG 本地改动：rx 通道当前是否开着。非 switchable 的设备（ES8311 双向共用）
+    // 在 MicPower 里是"一直读"的模式，通道被门控关掉后就不能再读了。
+    bool rx_ok = true;
   };
   MicLink mic_link() const { return mic_link_; }
 
+  // HG 本地改动：I2S 空闲门控。
+  // 为什么需要它：ESP-IDF 官方 Power Management 文档写明 I2S 驱动从
+  // i2s_channel_enable() 到 i2s_channel_disable() 之间**持续**持有
+  // ESP_PM_NO_LIGHT_SLEEP 锁。上游在本函数末尾把 tx/rx 两条通道都 enable 后
+  // 再也不 disable，于是编解码器一旦起来，light sleep 就被永久拒绝——息屏后
+  // CPU 仍在跑，实测每次"入睡"最多 9 ms 就被打回。这里让两条通道在没有录音、
+  // 没有放音时关掉，让出那把锁。
+  // 谁在用它：CodecMic 的任务循环负责"录音/空闲"的边沿，CodecSpeaker 的任务循环
+  // 负责"放音/空闲"的边沿（含放音尾部的排空），两侧各自持有/释放自己的引用。
+  // 另有一份引用来自睡眠门（idle_gate），保证息屏期间通道一定是关的。
+  // 从没 enable 过的通道会直接跳过——上游的 port_audio.cpp 对 tx 本来就是这么做的。
+  void set_want_tx(bool wanted);
+  void set_want_rx(bool wanted);
+  // 睡眠门：息屏期间整块关掉；醒来把两个方向交还给真实使用者。
+  // 用计数而不是布尔，是为了在"息屏还没结束又有人要放音"时不会互相覆盖。
+  void hold_audio_off(bool off);
+  // HG 本地改动：给 mic 任务一个"现在能不能读 rx"的实时答案。
+  // CodecMic 里 link_ 是 begin() 那刻的拷贝，门控之后改的 rx_ok 它看不到，
+  // 所以必须回问到 owner 本身。
+  bool rx_live() const { return rx_enabled_; }
+  bool tx_enabled() const { return tx_enabled_; }
+  bool rx_enabled() const { return rx_enabled_; }
+  void bind_tasks(bool tx_owner, bool rx_owner) { tx_bound_ = tx_owner; rx_bound_ = rx_owner; }
+
  private:
+  void apply_audio_channels();
+
   i2s_chan_handle_t tx_ = nullptr, rx_ = nullptr;
   esp_codec_dev_handle_t out_ = nullptr, in_ = nullptr;
   MicLink mic_link_;
+  // HG: 真实的"谁要用"（录音任务 / 放音任务各持一份），与"睡眠门"分开记，
+  // 这样息屏结束时能准确恢复，而不是猜。
+  bool mic_wants_ = false, spk_wants_ = false;
+  // HG: 睡眠门计数，>0 表示强制关闭，任何人都不能打开。
+  int audio_hold_ = 0;
+  // HG: 驱动侧最后一次拿到的状态，避免重复调用 enable/disable（它们不是幂等的）。
+  bool tx_enabled_ = false, rx_enabled_ = false;
+  // HG: 每条方向是否有一条会主动"重新打开"的任务存在。没有任务管的方向
+  // （例如没接麦克风的板子）一旦关掉就再也没人开，所以那种方向不收门。
+  bool tx_bound_ = false, rx_bound_ = false;
+  // HG: enable() 是否成功过。从没成功过的通道 disable 会报错，直接跳过。
+  bool tx_live_ = false, rx_live_ = false;
 };
 
 class CodecMic final : public hg::AudioIn {
@@ -536,6 +580,7 @@ class CodecMic final : public hg::AudioIn {
   static void task(void* arg);
   esp_codec_dev_handle_t dev_ = nullptr;
   CodecAudio::MicLink link_;
+  CodecAudio* audio_ = nullptr;  // HG: 用来开关 rx 通道
   TaskHandle_t task_ = nullptr;
   bool rmnm_ = false;
   int16_t* raw_ = nullptr;
@@ -544,7 +589,8 @@ class CodecMic final : public hg::AudioIn {
 
 class CodecSpeaker final : public hg::AudioOut {
  public:
-  bool begin(esp_codec_dev_handle_t dev, bool stereo32, int pa);
+  // HG 本地改动：多一个 audio 参数，让放音任务能按需开关 tx 通道。
+  bool begin(esp_codec_dev_handle_t dev, bool stereo32, int pa, CodecAudio* audio = nullptr);
   bool begin(uint32_t sample_rate) override;
   void write(const int16_t* samples, size_t count) override;
   void end() override;
@@ -571,6 +617,7 @@ class CodecSpeaker final : public hg::AudioOut {
  private:
   static void task(void* arg);
   esp_codec_dev_handle_t dev_ = nullptr;
+  CodecAudio* audio_ = nullptr;  // HG: 用来开关 tx 通道
   esp_codec_dev_sample_info_t format_ = {};
   bool can_power_down_ = false, powered_ = true;
   uint8_t volume_ = 70;
