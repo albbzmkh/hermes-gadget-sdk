@@ -22,6 +22,9 @@ namespace {
 const char* TAG = "hg.amoled";
 constexpr spi_host_device_t kHost = SPI2_HOST;
 constexpr int kBounceRows = 16;  // even, so every chunk keeps the window even
+// HG 本地改动：0x11 (sleep out) 之后到能收命令之间的等待。CO5300 手册要求 5 ms 以上，
+// 本文件其它初始化表给的是 100~600 ms；这里取 20 ms——足够稳，又不拖慢开屏。
+constexpr uint32_t kSleepOutMs = 20;
 
 constexpr uint32_t command_word(uint8_t cmd) { return (0x02u << 24) | (static_cast<uint32_t>(cmd) << 8); }
 constexpr uint32_t kRamWrite = (0x32u << 24) | (0x2Cu << 8);
@@ -316,11 +319,25 @@ void AmoledDisplay::flush(uint16_t y0, uint16_t y1) {
 
 void AmoledDisplay::set_backlight(uint8_t percent) {
   const uint8_t level = static_cast<uint8_t>(255u * std::min<uint8_t>(percent, 100) / 100u);
-  // Zero is screen sleep: turn the panel's output off too (display off keeps
-  // its memory, so drawing continues and waking needs no redraw delay).
-  if (level && !panel_on_) command(0x29, nullptr, 0);  // display on
+  // Zero is screen sleep.
+  //
+  // HG 本地改动：原来只发 0x28（display off），面板的源极驱动、升压和振荡器都还活着。
+  // 466x466 AMOLED 在"display off"下的静息电流是毫安级，几小时的待机就是它吃掉的。
+  // 现在补一条 0x10（sleep in），把驱动 IC 一起放倒；醒来先 0x11（sleep out）再 0x29。
+  // sleep out 之后按 CO5300 手册要等 5 ms 以上（本文件其余初始化表给的是 100~600 ms），
+  // 这里取 20 ms：够用且不影响开屏手感。
+  if (level) {
+    if (!panel_on_) {
+      command(0x11, nullptr, 0);  // sleep out
+      vTaskDelay(pdMS_TO_TICKS(kSleepOutMs));
+      command(0x29, nullptr, 0);  // display on
+    }
+  }
   command(0x51, &level, 1);
-  if (!level && panel_on_) command(0x28, nullptr, 0);  // display off
+  if (!level && panel_on_) {
+    command(0x28, nullptr, 0);  // display off
+    command(0x10, nullptr, 0);  // sleep in: the driver IC's own supplies go down too
+  }
   panel_on_ = level != 0;
 }
 

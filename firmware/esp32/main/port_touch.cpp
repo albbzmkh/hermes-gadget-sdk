@@ -22,7 +22,12 @@ namespace {
 
 const char* TAG = "hg.touch";
 constexpr uint32_t kPollMs = 20;
-constexpr uint32_t kDozePollMs = 50;
+// HG 本地改动：50 ms → 120 ms。StopWatch 的 CST820 没有把 INT 接到 ESP32
+//（b.touch.int_gpio = -1），所以 doze 时这条路径永远是"定时轮询 I2C"，没有任何
+// 唤醒源能提前叫醒它。每次轮询都是一次 100 kHz 的 I2C 事务，会把 CPU 从 light sleep
+// 拉起来。120 ms 下第一次触摸的响应最坏多几十毫秒，但省下的是一整夜的唤醒次数。
+// 有 INT 的板子仍走 kArmedDozeWaitMs 那条更省的路。
+constexpr uint32_t kDozePollMs = 120;
 // Dozing with INT armed as a wake source: the sleep exit hook and nudge() end the wait, so the
 // task needs no poll of its own and the CPU stays in light sleep between Wi-Fi beacons.
 constexpr uint32_t kArmedDozeWaitMs = 1000;

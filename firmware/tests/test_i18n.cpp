@@ -267,7 +267,8 @@ constexpr Msg kLines[] = {
     Msg::ProfileRefusedUnknown, Msg::ProfileRefused, Msg::CameraTake, Msg::CameraHoldStill, Msg::CameraRetake,
     Msg::CameraFailed,
     // hero headlines and one-line captions
-    Msg::HiImHermes, Msg::AskMeAnything, Msg::UpShowsLastReply, Msg::SwipeDownForSessions,
+    // HG 本地改动：HiImAlt 是首页第二套后端标题，加进这张表才能实测它放得下。
+    Msg::HiImHermes, Msg::HiImAlt, Msg::AskMeAnything, Msg::UpShowsLastReply, Msg::SwipeDownForSessions,
     Msg::ButtonShowsSessions, Msg::LowBattery, Msg::Listening, Msg::SpeakNowPause, Msg::LiftFingerToSend, Msg::OfflineStillRecording, Msg::ReconnectingToSend,
     Msg::ReleaseToSend, Msg::Thinking, Msg::HermesAsks, Msg::Restarting, Msg::Updating, Msg::SetupNeeded,
     Msg::NoNetwork, Msg::Authenticating, Msg::ConnectingToHermes, Msg::PairingCode, Msg::PairThisDevice, Msg::RefusedByRoute,

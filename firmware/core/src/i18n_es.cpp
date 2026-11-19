@@ -106,7 +106,8 @@ const Entry kSpanish[] = {
     {Msg::SdLog, "Registro en tarjeta SD"},
     {Msg::SdLogOn, "Activado\nEl registro se copia a hermes.log en la tarjeta microSD."},
     {Msg::SdLogOff, "Desactivado\nNo se escribe nada en la tarjeta microSD."},
-    // HG local change: switching between the two servers.
+    // HG 本地改动：两个后端之间的切换（设置菜单里那一行 + 切换后的提示）。
+    // 这些串是上一批改动带进来的，补上中文注释说明归属。
     {Msg::Backend, "Servidor"},
     {Msg::BackendAltOn, "OpenClaw"},
     {Msg::BackendAltOff, "Hermes"},
@@ -232,6 +233,8 @@ const Entry kSpanish[] = {
     // Ready screen
     {Msg::Ready, "Listo"},
     {Msg::HiImHermes, "Hola, soy Hermes"},
+    // HG 本地改动：首页标题要说清当前连的是哪个后端，西语版跟着英文版一起加。
+    {Msg::HiImAlt, "Hola, soy OpenClaw"},
     {Msg::AskMeAnything, "Pregúntame algo"},
     {Msg::UpShowsLastReply, "UP: mi última respuesta"},
     {Msg::TapScreenToTalk, "Toca la pantalla y habla"},

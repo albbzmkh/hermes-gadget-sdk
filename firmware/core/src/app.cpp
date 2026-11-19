@@ -226,12 +226,16 @@ void App::load_settings() {
   alt_server_url_ = setting("server2", profile_.default_alt_server_url);
   alt_access_token_ = setting("token2", profile_.default_alt_access_token);
   using_alt_ = alt_configured() && setting("server2_on", "off") == "on";
+  // HG 本地改动：OpenClaw 就是 :8766 那条，跟它躺在 server 还是 server2 无关。
+  // 先把"在用的"归位到 server_url_（下面两段 swap），再只按在用地址的端口判身份，
+  // 这样切到哪边都不会把名字认错。
   if (using_alt_) {
     // 两个地址交换：server_url_/access_token_ 始终是"正在用的那个"，
     // 这样连接、握手、重连、状态上报全都不用改。
     std::swap(server_url_, alt_server_url_);
     std::swap(access_token_, alt_access_token_);
   }
+  using_openclaw_ = server_url_.find(":8766") != std::string::npos;
   talk_mode_ = setting("talk_mode", "hold") == "tap" ? TalkMode::Tap : TalkMode::Hold;
   int vol = std::atoi(setting("volume", "70").c_str());
   volume_ = static_cast<uint8_t>(std::max(0, std::min(100, vol)));
@@ -619,6 +623,8 @@ bool App::switch_server() {
   std::swap(server_url_, alt_server_url_);
   std::swap(access_token_, alt_access_token_);
   using_alt_ = !using_alt_;
+  // HG 本地改动：身份跟着地址走，不跟着"第几个"走。切换后重新按端口判定一次。
+  using_openclaw_ = server_url_.find(":8766") != std::string::npos;
   if (hal_.storage) {
     // 三个键一起写：地址对、令牌对、以及"上次用的是哪个"。
     hal_.storage->set(setting_storage_key("server"), server_url_);
@@ -2504,8 +2510,16 @@ void App::tick() {
   timer_tick();
   perf_tick();
 
+  // HG 本地改动：屏黑着的时候不跑帧循环。原来这里每 100 ms 无条件走一遍
+  // update_model()（重拼字符串、重排版面）——而 update_model() 里不少分支的
+  // render(m) 没有 display_sleeping_ 判断，等于屏黑着还在往 466x466 的 framebuffer
+  // 上写 22 万像素并 flush 一次。醒来时 wake_display() 已经会调 update_model()，
+  // 所以跳过这里不会让屏幕显示过期内容。
+  // 例外两种情况：闹钟正在闪屏（靠这个循环推进闪烁相位），以及 perf bench 在跑
+  // 固定负载——两种都要照旧。
   if (t - frame_at_ >= kFrameMs) {
     frame_at_ = t;
+    if (display_sleeping_ && !alarm_ringing_ && bench_ == Bench::None) return;
     // The port's time of day feeds the clock face; read once per frame.
     wall_valid_ = hal_.system && hal_.system->wall_time(wall_);
     ++model_.frame;
@@ -2529,6 +2543,9 @@ void App::update_model() {
   m.no.clear();
   m.qr = nullptr;
   m.face = face_ ? &*face_ : nullptr;
+  // HG 本地改动：连第二个后端时把吉祥物换成 OpenClaw 标记。
+  // 只在主机没推脸（face_ 为空）时才看得出来——主机推的脸更具体，应该盖过这个默认。
+  m.alt_face = using_openclaw_ && !face_;
   m.dash.clear();
   m.hero = false;
   m.name_target = false;
@@ -2844,8 +2861,12 @@ void App::update_model() {
     m.hero = !showing_reply;
     if (m.hero) {
       const bool switching = agent_profiles_.size() > 1;
-      m.headline = switching && agent_profile_ != "default" ? tr(Msg::ProfileGreeting, {agent_profile_name()})
-                                                            : std::string(tr(Msg::HiImHermes));
+      // HG 本地改动：连第二个后端时首页写它自己的名字（Hi, I'm OpenClaw）。
+      // 为什么优先于 profile 名字：agent profile 是同一个主机下的子身份，
+      // 而这里换的是主机本身——用户要确认的是"我在命令谁"，主机名更直接。
+      m.headline = using_openclaw_ ? std::string(tr(Msg::HiImAlt))
+                   : switching && agent_profile_ != "default" ? tr(Msg::ProfileGreeting, {agent_profile_name()})
+                                                              : std::string(tr(Msg::HiImHermes));
       m.detail = tr(reply_.empty() || !profile_.has_scroll_buttons ? Msg::AskMeAnything : Msg::UpShowsLastReply);
       const bool sessions = dashboard_ready_ && can_open_dashboard() && reply_.empty();
       if (sessions)
@@ -2915,7 +2936,7 @@ json::Value App::status_value() const {
       .set("network", network_up_);
   // HG 本地改动：`status` 里带上"当前后端名字"，主机侧一眼能看出设备连的是哪一个。
   // 没有第二个后端时只报 hermes，字段形状不变，老的宿主代码不受影响。
-  s.set("backend", using_alt_ ? "openclaw" : "hermes");
+  s.set("backend", using_openclaw_ ? "openclaw" : "hermes");
   // 备用的那个始终是 alt_server_url_（server_url_ 永远是"正在用的"）。
   if (alt_configured()) s.set("alternate_server", alt_server_url_);
   if (profile_.tailnet) {
@@ -3041,7 +3062,7 @@ std::string App::console(std::string_view raw) {
   if (cmd == "server") {
     if (rest.empty()) {
       json::Value v = json::Value::object();
-      v.set("active", using_alt_ ? "openclaw" : "hermes")
+      v.set("active", using_openclaw_ ? "openclaw" : "hermes")
           .set("url", server_url_)
           .set("alternate", alt_server_url_);
       return "@server " + v.dump();

@@ -59,6 +59,14 @@ class M5IOE1 {
   // Called from the pa_gpio callback set up in port_codec.cpp.
   esp_err_t set_amp(bool on);
 
+  // HG 本地改动：息屏/睡眠时把 L3B 上那些"待机也在吃电"的负载真正断掉。
+  // 为什么需要它：begin() 把 PYG3(ES8311+MIC 供电)、PYG8(AMOLED 3V3)、PYG10(AW8737A 功放)
+  // 全拉高就再也没关过，而固件里 board_pa 回调始终没接上（board.codec.speaker_pa=false，
+  // pa=-1），于是功放一直使能、编解码器一直供电。屏幕一黑，这几路照样吃几十 mA，
+  // 是"息屏几小时没电"的第二号原因。
+  // 只关 PYG3 和 PYG10，不动 PYG8：AMOLED 的 3V3 一断，屏内 GRAM 就丢了，醒来必须整屏重画。
+  esp_err_t set_audio_power(bool on);
+
   // Optional: pulse the vibration motor for duration_ms milliseconds.
   esp_err_t vibrate(uint16_t duty_pct, uint32_t duration_ms);
 

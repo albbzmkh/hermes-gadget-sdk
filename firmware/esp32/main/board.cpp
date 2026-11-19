@@ -976,6 +976,13 @@ BoardConfig make() {
   b.talk_label = "Blue";
   b.cancel_label = "Yellow";
 
+  // HG 本地改动：允许息屏时进 light sleep。上游这块板没设这个标志，于是
+  // app_main 里 keep_pins_through_sleep() 被跳过、board.light_sleep && app.dozing() 恒 false，
+  // 屏幕一黑 CPU 仍满速跑，几小时吃掉整块电池。两块 SPI/QSPI 屏（AMOLED 的 6 根线）
+  // 需要在睡眠里保住 pin，keep_pins_through_sleep() 会处理。
+  // 外围供电靠 M5IOE1 的寄存器，light sleep 不会清它，所以醒来不用重新上电。
+  b.light_sleep = true;
+
   // Red short press toggles the display; hold 1.5 s opens/closes Settings.
   // No GPIO latch: power-off goes through M5PM1 PMIC SYS_CMD
   return b;

@@ -527,12 +527,27 @@ extern "C" void app_main(void) {
   const bool audio_power = peripherals_ready && (!board.axp_audio_supply || g_power.enable_audio_supply());
   if (!audio_power) ESP_LOGE(TAG, "audio supply unavailable");
   if (board.sticks3) g_codec_speaker.board_pa = [](bool on) { g_sticks3.set_amplifier(on); };
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+  // HG 本地改动：把功放使能接上 M5IOE1 的 PYG10。上游这块板是 speaker_pa=false、pa=-1，
+  // 于是 begin() 拿到的 PA 脚是 -1，board_pa 回调从没设置过，AW8737A 就一直使能。
+  // 接上之后 CodecSpeaker 才能在空转时把功放关掉（每帧 20 ms 的开销换来几 mA 的静息电流）。
+  if (peripherals_ready) g_codec_speaker.board_pa = [](bool on) { hgp::m5ioe1().set_amp(on); };
+#endif
   if (board.codec.enabled && audio_power && g_codec.begin(board.codec, i2c_bus)) {
     if (g_codec_mic.begin(g_codec.in(), board.codec.rmnm_mics, g_codec.mic_link())) hal.mic = &g_codec_mic;
     g_codec_speaker.es8311_fade_ramp = board.codec.dac_fade_ramp && board.codec.speaker == hgp::SpeakerCodec::Es8311;
     if (g_codec_speaker.begin(g_codec.out(), board.codec.stereo32, board.codec.speaker_pa ? board.codec.pa : -1)) hal.speaker = &g_codec_speaker;
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+    // HG 本地改动：这块板是 ES8311 双向共用（mic 和 speaker 是同一个 handle），
+    // mic_link().switchable 因此是 false，上游那行 allow_power_down 从来没执行过，
+    // 息屏时 ES8311 和 I2S 一直开着。这里直接放行：CodecSpeaker::power_down() 里
+    // 只关 DAC 输出方向和 I2S 通道，共用的 ES8311 ADC 由 MicPower 在录音时自己开合，
+    // 两者互不干扰；power_up() 在放音之前会把 DAC 重新打开。
+    if (board.light_sleep) g_codec_speaker.allow_power_down(g_codec.mic_link().format);
+#else
     // Light-sleep boards power the DAC down while dozing, if the mics don't share it.
     if (board.light_sleep && g_codec.mic_link().switchable) g_codec_speaker.allow_power_down(g_codec.mic_link().format);
+#endif
   }
   if (hal.speaker) hal.speaker_decoder = &g_opus;  // Opus replies when Hermes offers them
   const bool imu = peripherals_ready && board.imu.enabled && g_motion.begin(board.imu, i2c_bus);
@@ -711,6 +726,25 @@ extern "C" void app_main(void) {
     g_wifi.retry_now();
   };
 #endif
+#if CONFIG_HG_BOARD_M5STACK_STOPWATCH
+  // HG 本地改动：doze 期间把 L3B 上的音频负载整段断电。power_down() 只是关编解码器的
+  // 输出方向和 I2S，ES8311 的模拟部分和 AW8737A 仍然带电；实测这两路是息屏后最实的
+  // 一笔静息电流。醒来时先恢复供电，再让 power_up() 重新打开编解码器（on_doze_end 顺序保证）。
+  // 录音不可能发生在 doze 里：App::power_tick 的 doze 条件要求 mode_==Idle，且不在回合中。
+  if (board.light_sleep && peripherals_ready) {
+    g_system.on_doze_start = [] {
+      g_codec_speaker.power_down();
+      hgp::m5ioe1().set_audio_power(false);
+    };
+    hgp::EspSystem::on_sleep_held_change = [] { g_touch.nudge(); };
+    g_system.on_doze_end = [] {
+      hgp::m5ioe1().set_audio_power(true);
+      g_touch.nudge();
+      g_codec_speaker.power_up();
+      g_wifi.retry_now();
+    };
+  }
+#endif
   app.begin();
   g_sdlog.set_enabled(app.sd_log());  // the stored setting wins over the default
 #if !CONFIG_HG_BOARD_ESP32_CYD
@@ -729,7 +763,12 @@ extern "C" void app_main(void) {
     // Block briefly for events, then run the core's timers and animations.
     // Dozing on a light-sleep board, the chip may sleep between events; input and
     // the network still wake it. Other boards keep the short wait.
-    if (hgp::events::receive(ev, pdMS_TO_TICKS(board.light_sleep && app.dozing() ? hg::App::kDozeWaitMs : 10))) {
+    // HG 本地改动：原来是 board.light_sleep && app.dozing()，但 dozing 只在
+    // "在线且已配对" 时才为 true；一块离线或未配对的板子息屏后照样 10 ms 转一圈，
+    // 一晚上白耗电。这里改成"屏幕黑着"就够了——屏黑时本来就没有动画要刷，
+    // 醒来的路径都是事件（触摸、按键、网络、电源），receive() 会立刻返回。
+    const bool idle_loop = app.dozing() || (board.light_sleep && app.display_sleeping());
+    if (hgp::events::receive(ev, pdMS_TO_TICKS(idle_loop ? hg::App::kDozeWaitMs : 10))) {
       do {
         dispatch(app, ev);
         hgp::events::release(ev);

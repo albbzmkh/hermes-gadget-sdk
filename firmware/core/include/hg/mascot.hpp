@@ -80,4 +80,16 @@ bool make_anchors(const int64_t (&v)[10], Anchors& out);
 Bitmap pick(int max_size, Frame frame, const Face* face);
 const Anchors& anchors(const Face* face);
 
+// HG 本地改动：第二套内置脸，用来区分设备当前连的是哪个后端。
+// 为什么单独一个命名空间而不是再做一份 Face：一个 Face 是"主机推下来的一张脸"（带哈希、
+// 可能带彩色像素、可能只覆盖部分帧），而这套是编进固件、和默认吉祥物同构的三帧单色位图，
+// 只是摆设不同。复用 pick 的尺寸挑选逻辑，其余一概不碰。
+namespace alt {
+
+// The built-in OpenClaw mark, in the same four sizes and three frames as the mascot.
+Bitmap pick(int max_size, Frame frame);
+const Anchors& anchors();
+
+}  // namespace alt
+
 }  // namespace hg::mascot

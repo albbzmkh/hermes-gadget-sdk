@@ -18,6 +18,9 @@ set(HG_CORE_SOURCES
     src/json.cpp
     src/mascot.cpp
     src/mascot_data.cpp
+    # HG 本地改动：第二套内置脸（OpenClaw 标记），只在配了第二个后端的固件里用得上，
+    # 但它很小（约 160 KB 源码、6 KB 位图），和吉祥物一起编进来换来"切后端就换脸"。
+    src/mascot_data_alt.cpp
     src/protocol.cpp
     src/qr.cpp
     src/setup.cpp

@@ -42,3 +42,21 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
 # ── Audio ─────────────────────────────────────────────────────────────────────
 # ES8311 I2C address is the SDK default (0x18 = ES8311_CODEC_DEFAULT_ADDR).
 # No extra sdkconfig needed.
+
+# ── 省电：让"息屏"真的省电 ──────────────────────────────────────────────────
+# 为什么这么改：本板原来一行电源管理配置都没有，CONFIG_PM_ENABLE 是关的，
+# 于是 esp_pm_configure() 整段被编掉、EspSystem::enable_doze() 直接 return false、
+# App 算出来的 dozing 传下去被 set_dozing() 的首行判断挡掉。结果就是：
+# 屏幕黑了，ESP32-S3 仍以 160 MHz 满速跑，主循环每 10 ms 醒一次，几小时就把
+# 小电池耗干。下面这几项把"息屏＝降频＋light sleep"这条已有的代码路径打开。
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+# 每段 doze 结束时打一行 "light sleep N% / M wake-ups"，用来验证省电真的生效。
+CONFIG_PM_LIGHT_SLEEP_CALLBACKS=y
+# USB 插着时不许进 light sleep，否则串口台和 JTAG 会断。
+# 真正的主要保险仍是 App 那边的"必须在电池上"判断。
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+# light sleep 里 Wi-Fi 靠慢时钟定时醒来看 beacon；17.5 MHz/256 的振荡器比
+# 默认 150 kHz 的 RC 漂得少，beacon 对齐更准，也就少醒几次。
+# CONFIG_RTC_CLK_SRC_INT_RC is not set
+CONFIG_RTC_CLK_SRC_INT_8MD256=y

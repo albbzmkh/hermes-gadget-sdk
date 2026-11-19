@@ -140,6 +140,9 @@ class App {
   // 端口层（按键回调、串口命令、设置菜单）只需要调下面三个入口。
   bool alt_configured() const { return !alt_server_url_.empty(); }
   bool using_alt() const { return using_alt_; }
+  // HG 本地改动：当前这条连接是不是连到 OpenClaw 桥（:8766）。界面上换标题、换头像
+  // 都该看这个而不是 using_alt()——alt 只说明"用了第二个地址"，不说明它是谁。
+  bool using_openclaw() const { return using_openclaw_; }
   const std::string& alt_server_url() const { return alt_server_url_; }
   // 切到另一个后端并立刻重连。没有配置第二个地址时什么也不做并返回 false。
   bool switch_server();
@@ -242,6 +245,9 @@ class App {
   // touch_wake off: a dark screen ignores the touchscreen until a key lights it.
   bool touch_wake() const { return touch_wake_; }
   bool touch_ignored() const { return !touch_wake_ && display_sleeping_; }
+  // HG 本地改动：公开"屏幕是否黑着"。端口的空转节拍需要它——dozing() 还要求
+  // 在线且已配对，离线的板子息屏后照样按 10 ms 转圈，白白耗电。
+  bool display_sleeping() const { return display_sleeping_; }
   // The low battery alert is on screen: the level it crossed, or 0.
   uint8_t battery_alert() const { return battery_alert_; }
   // An input on a lit screen closes the alert first, then goes on as usual (a touch
@@ -267,7 +273,11 @@ class App {
   // Wi-Fi and the Hermes connection stay up.
   void on_power_key();
   // Dozing (System::set_dozing): the port's loop may wait this long for events.
-  static constexpr uint32_t kDozeWaitMs = 100;
+  // HG 本地改动：100 ms → 250 ms。这个等待是主循环空转时的节拍；100 ms 意味着
+  // 息屏后 CPU 每秒还是要醒 10 次去 WsLink 里 poll 一下心跳和队列。250 ms 下
+  // 心跳（60 s 级）和按键（人按得动的速度）都来不及错过，但它让 tickless idle
+  // 有更长的连续睡眠窗口。有事件进来时 receive() 会立即返回，不受此限制。
+  static constexpr uint32_t kDozeWaitMs = 250;
   // The longest recording; the recording buffer holds this much (RecordingBuffer::bytes_for).
   static constexpr uint32_t kMaxUtteranceMs = 30000;
   // A recording that ended with the connection lost waits this long for it to come back
@@ -536,6 +546,9 @@ class App {
   std::string alt_server_url_;
   std::string alt_access_token_;
   bool using_alt_ = false;
+  // HG 本地改动：当前连的是不是 OpenClaw 桥（:8766）。由 load_settings 按端口判定，
+  // switch_server 之后保持一致。界面用它决定首页标题和吉祥物。
+  bool using_openclaw_ = false;
   TalkMode talk_mode_ = TalkMode::Hold;
   uint8_t volume_ = 70;
   uint8_t brightness_ = 100;
@@ -700,8 +713,9 @@ class App {
   bool show_power_notice(PowerNotice notice);
   void dismiss_charging_notice(bool darken);
   bool display_dimmed_ = false, display_sleeping_ = false, power_off_armed_ = false;
-  // The power key asked for the dark right now, so power_tick's "a screen that has
-  // not settled stays lit" rule must not undo it. Cleared by any wake.
+  // HG 本地改动：电源键亲手要求的息屏。power_tick 里有一条上游规则"没配好网的板子
+  // 必须保持亮屏"（否则用户看不到配网提示），红键单击会被那一秒一次的重置覆盖，
+  // 表现成"只闪一下"。这个标志让手动息屏压过那条规则；任何一次唤醒都会清掉它。
   bool manual_sleep_ = false;
   bool dozing_ = false, on_battery_ = false;
   void set_dozing(bool dozing);

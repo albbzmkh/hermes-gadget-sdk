@@ -107,6 +107,10 @@ struct UiModel {
   uint8_t caption_lines = 1;  // hero: lines the detail may wrap to (then "..")
   bool name_target = false;   // hero: the caption sits in a panel that a tap opens the profile list from
   const mascot::Face* face = nullptr;  // drawn instead of the mascot; borrowed like `qr`
+  // HG 本地改动：设备现在连的是第二个后端时，吉祥物换成本固件内置的另一套图（OpenClaw 标记）。
+  // 为什么是一个布尔而不是再塞一个 Face：这套图编在固件里、和默认吉祥物同构（同尺寸同三帧），
+  // 只是换个摆件，没必要走 Face 的哈希/彩色/分帧那套。主机推下来的 face 仍然优先。
+  bool alt_face = false;
   // Profiles screen: profiles per page asked for (4, 6, 9 or 16; the panel may fit fewer), and the
   // items whose icon is `face` and the mascot (-1: none). The others show their initial.
   uint8_t grid = 4;

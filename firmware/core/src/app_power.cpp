@@ -69,7 +69,7 @@ bool App::wake_display() {
     return true;  // the input that asked is consumed, as on a timed-out screen
   }
   activity_at_ = now();
-  manual_sleep_ = false;  // awake again: the settle rule applies as usual
+  manual_sleep_ = false;  // HG 本地改动：醒了就清掉手动息屏标志，让"未配网保持亮屏"的规则照常生效
   const bool sleeping = display_sleeping_;
   const bool was_clock = clock_showing_;
   clock_showing_ = false;  // the clock ends at once, with the dim and sleep states
@@ -127,10 +127,9 @@ void App::on_power_key() {
     dismiss_overlay();
     update_model();
   }
-  // A board that has not settled — no network yet, or unpaired — keeps a lit
-  // screen lit (see power_tick). The key is the user saying they are done
-  // looking, so this dark has to outrank that rule; otherwise it lights the
-  // screen again on the next tick and the press reads as a flicker.
+  // HG 本地改动：没配好网的板子上游要求保持亮屏（见 power_tick），但那会让红键息屏
+  // 在下一秒被重新点亮、看起来只是闪了一下。这里记下"是用户主动要关的"，让这一黑
+  // 压过那条规则。
   manual_sleep_ = true;
   display_sleeping_ = true;
   apply_backlight();
@@ -354,6 +353,8 @@ void App::power_tick() {
     // Something for the user wakes the screen. A connection still settling keeps a
     // lit screen lit, but leaves a dark one dark: Wi-Fi coming and going (a commute)
     // must not turn the screen on and leave it on.
+    // HG 本地改动：多了 !manual_sleep_ 这一项——用户用红键关的屏，不许被
+    // "连接还没稳定就必须亮着"这条规则重开。
     if (busy || (!settled && !display_sleeping_ && !manual_sleep_)) {
       wake_display();
     } else if (ringing) {

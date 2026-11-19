@@ -143,6 +143,20 @@ esp_err_t M5IOE1::set_amp(bool on) {
   return set_bits(REG_OUT, IOE_SPK, on);
 }
 
+// HG 本地改动：一次关掉 L3B 上的音频负载（功放 + 编解码器+MIC 供电）。
+// 顺序是先关功放再关供电，避免在功放还使能时抽掉它的电源、往喇叭里送一声爆音。
+// 不动 IOE_L3B：AMOLED 的 3V3 一断屏内 GRAM 就丢，醒来要整屏重画，得不偿失。
+esp_err_t M5IOE1::set_audio_power(bool on) {
+  if (!on) {
+    esp_err_t err = set_bits(REG_OUT, IOE_SPK, false);
+    if (err != ESP_OK) return err;
+    return set_bits(REG_OUT, IOE_AUDIO, false);
+  }
+  esp_err_t err = set_bits(REG_OUT, IOE_AUDIO, true);
+  if (err != ESP_OK) return err;
+  return set_bits(REG_OUT, IOE_SPK, true);
+}
+
 esp_err_t M5IOE1::vibrate(uint16_t duty_pct, uint32_t duration_ms) {
   if (duty_pct > 100) duty_pct = 100;
   // PWM1_DUTY: bit15 = enable, bits[14:0] = duty (0–1023 maps to 0–100%)

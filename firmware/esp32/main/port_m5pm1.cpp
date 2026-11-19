@@ -1,10 +1,13 @@
 // M5PM1 power-management driver for M5Stack StopWatch.
 // Register facts are from M5PM1 v1.0.6 and M5Stack's StopWatch BSP.
+
 #include "port_m5pm1.hpp"
 
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "hg/battery.hpp"
+// HG 本地改动：poll() 要靠 EspSystem::dozing_now() 决定息屏时放慢轮询。
+#include "port.hpp"
 
 namespace hgp {
 namespace {
@@ -49,6 +52,9 @@ constexpr uint8_t kButtonIrqAll = 0x07;
 constexpr uint8_t kButtonWakeIrq = 1u << 1;
 constexpr uint8_t kShutdown = 0xA1;
 constexpr uint32_t kPollMs = 20;
+// HG 本地改动：doze 时的轮询间隔。见 poll() 里的说明——20 Hz 的 I2C 读会把 light
+// sleep 一次次打断，息屏时没必要这么勤。
+constexpr uint32_t kDozePollMs = 200;
 
 }  // namespace
 
@@ -103,7 +109,11 @@ bool M5PM1Power::begin(i2c_master_bus_handle_t bus) {
                      kSingleResetDisable | kLongDelay4s | kDoubleDelay250ms);
   ok = ok && update8(kRegIrqMask1, 0x1F, 0x1F);
   ok = ok && update8(kRegIrqMask2, 0x3F, 0x3F);
-  ok = ok && update8(kRegIrqMask3, kButtonIrqAll, kButtonWakeIrq);
+  // HG 本地改动：0x45（按钮中断屏蔽）的语义和其它屏蔽寄存器相反——库的
+  // irqSetBtnMask() 里 ENABLE 是"置位"、DISABLE 是"清位"，所以要把 0x07 三位
+  // （CLICK/WAKE/DOUBLE）都置上才算全部使能。原来写 kButtonWakeIrq(0x02) 等于
+  // 只放开了 WAKE，单击和双击事件都被屏蔽。
+  ok = ok && update8(kRegIrqMask3, kButtonIrqAll, kButtonIrqAll);
   ok = ok && update8(kRegGpioOpenDrain, kIrqPin, kIrqPin);
   ok = ok && update8(kRegGpioFunction0, kGpio1FunctionMask, kGpio1IrqFunction);
   clear_irqs();
@@ -135,8 +145,16 @@ void M5PM1Power::poll(hg::App& app, uint32_t now_ms) {
   if (!dev_ || now_ms - polled_at_ < kPollMs) return;
   polled_at_ = now_ms;
 
+  // HG 本地改动：doze 时把轮询从 20 ms 放到 200 ms。这块板的红键在 M5PM1 内部，
+  // GPIO12 只是它的 IRQ，而实测 PMIC 的按键状态位和 IRQ 都不动，所以只能在主循环里
+  // 反复读 0x48。20 Hz 的 I2C 读本身就会一次次把 CPU 从 light sleep 里叫醒，
+  // 把 tickless idle 的占空比压下去；息屏时没人会精确到 20 ms 地按红键，200 ms 足够。
+  const bool dozing = hgp::EspSystem::dozing_now();
+  if (dozing && now_ms - polled_at_ < kDozePollMs) return;
+
   bool down = false;
-  if (!key_pressed(down)) return;
+  const bool read_ok = key_pressed(down);
+  if (!read_ok) return;
   if (!key_armed_) {
     key_down_ = down;
     if (!down) key_armed_ = true;
@@ -159,7 +177,6 @@ void M5PM1Power::poll(hg::App& app, uint32_t now_ms) {
       // Second press inside the window: this is a double click, so the PMIC will
       // power off. Drop the click so the screen is not toggled on the way out.
       click_pending_ = false;
-      ESP_LOGI(kTag, "red key double click: leaving shutdown to the PMIC");
     }
   } else if (down && !key_held_ && now_ms - key_down_at_ >= kSettingsHoldMs) {
     key_held_ = true;
