@@ -13,6 +13,17 @@ menu "Hermes Gadget"
         config HG_DEFAULT_ACCESS_TOKEN
             string "Access token (only if GADGET_ACCESS_TOKEN is set on the host)"
             default ""
+        # HG 本地改动：第二个后端（OpenClaw 桥）。留空则本固件只有单后端，
+        # 设置菜单里不会出现切换项，按键组合也保持原来 1 秒打开设置的行为。
+        config HG_DEFAULT_ALT_SERVER_URL
+            string "Alternate gadget endpoint (second server)"
+            default ""
+            help
+                ws://<host>:8766/gadget for the OpenClaw bridge, if this firmware should
+                be able to switch between two hosts. Leave empty for a single server.
+        config HG_DEFAULT_ALT_ACCESS_TOKEN
+            string "Alternate access token"
+            default ""
         config HG_DEFAULT_WIFI_SSID
             string "Wi-Fi SSID"
             default ""

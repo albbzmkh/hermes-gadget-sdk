@@ -55,6 +55,8 @@ constexpr uint32_t kTurnTimeoutMs = 30 * 60000;   // ...once its turn.start says
 constexpr uint32_t kSettleAfterReplyMs = 6000;
 constexpr uint32_t kNewSessionHoldMs = 2000;  // hold CANCEL this long to start a new session
 constexpr uint32_t kNewSessionHintMs = 600;   // ...and show the countdown after this long
+// HG 本地改动：两个后端之间的按键切换（TALK+CANCEL 同时按住 1 秒）。
+// 常量在 app_settings.cpp 里（那里是唯一使用方）。
 constexpr uint32_t kPromptArmMs = 600;        // presses this soon after a question appears don't answer it
 constexpr uint32_t kPageLineMs = 1000;        // long text: reading time per line before the next page
 constexpr uint32_t kManualScrollPauseMs = 15000;  // UP/DOWN pauses automatic paging this long
@@ -85,7 +87,10 @@ constexpr uint32_t kBackoffMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 constexpr size_t kBackoffSteps = sizeof(kBackoffMs) / sizeof(kBackoffMs[0]);
 
 const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "battery_display", "battery_estimate", "language", "wifi_ssid", "wifi_pass",
-                                    "face_down_sleep", "clock", "time_format", "touch_wake", "battery_alert", "battery_alert_sound", "charging_notice", "charging_sound", "charged_notice", "charged_sound", "double_home", "wake_talk", "touch_talk", "profile_grid", "wifi_deep_sleep", "animation", "sd_log"};
+                                    "face_down_sleep", "clock", "time_format", "touch_wake", "battery_alert", "battery_alert_sound", "charging_notice", "charging_sound", "charged_notice", "charged_sound", "double_home", "wake_talk", "touch_talk", "profile_grid", "wifi_deep_sleep", "animation", "sd_log",
+                                    // HG 本地改动：第二个后端地址/令牌，以及"上次用的是哪一个"。
+                                    // 为什么 `server2` 不用 `alternate_server_url`：NVS 键最多 15 个字符。
+                                    "server2", "token2", "server2_on"};
 
 // NVS limits storage keys to 15 characters; keep the public setting name unchanged.
 std::string_view setting_storage_key(std::string_view key) {
@@ -227,6 +232,17 @@ void App::load_settings() {
   name_ = setting("name", profile_.default_name);
   server_url_ = setting("server", profile_.default_server_url);
   access_token_ = setting("token", profile_.default_access_token);
+  // HG 本地改动：第二个后端。没配 `server2` 时它为空，菜单里的切换项就不出现，
+  // 单后端板和上游行为完全一致。`server2_on` 记住上次选的后端，重启后不用再切。
+  alt_server_url_ = setting("server2", profile_.default_alt_server_url);
+  alt_access_token_ = setting("token2", profile_.default_alt_access_token);
+  using_alt_ = alt_configured() && setting("server2_on", "off") == "on";
+  if (using_alt_) {
+    // 两个地址交换：server_url_/access_token_ 始终是"正在用的那个"，
+    // 这样连接、握手、重连、状态上报全都不用改。
+    std::swap(server_url_, alt_server_url_);
+    std::swap(access_token_, alt_access_token_);
+  }
   talk_mode_ = setting("talk_mode", "hold") == "tap" ? TalkMode::Tap : TalkMode::Hold;
   int vol = std::atoi(setting("volume", "70").c_str());
   volume_ = static_cast<uint8_t>(std::max(0, std::min(100, vol)));
@@ -605,6 +621,50 @@ void App::on_transport_open() {
   phase_since_ = now();
   last_rx_ = now();
   send_hello();
+  update_model();
+}
+
+// HG 本地改动：两个后端之间的切换。把"正在用的"和"备用的"对调，存进 NVS，重连。
+// 为什么换而不并存两条连接：两条 WebSocket 会同时占 RAM（这块板子内部 RAM 本来就紧），
+// 而且一对会话变量（session/pairing/prompt/录音）无法同时服务两个主机。
+// 为什么 swap 而不是重新读设置：swap 天然对称，来回切多少次都不会丢地址。
+bool App::switch_server() {
+  if (!alt_configured()) return false;
+  std::swap(server_url_, alt_server_url_);
+  std::swap(access_token_, alt_access_token_);
+  using_alt_ = !using_alt_;
+  if (hal_.storage) {
+    // 三个键一起写：地址对、令牌对、以及"上次用的是哪个"。
+    hal_.storage->set(setting_storage_key("server"), server_url_);
+    hal_.storage->set(setting_storage_key("token"), access_token_);
+    hal_.storage->set(setting_storage_key("server2"), alt_server_url_);
+    hal_.storage->set(setting_storage_key("token2"), alt_access_token_);
+    hal_.storage->set(setting_storage_key("server2_on"), using_alt_ ? "on" : "off");
+  }
+  log(LogLevel::Info, std::string("switching to ") + (using_alt_ ? "the alternate server: " : "Hermes: ") + server_url_);
+  reconnect_to_new_server();
+  return true;
+}
+
+// HG 本地改动：直接指定后端（串口 `server hermes|openclaw`）。已经是它时返回 false。
+bool App::select_server(bool alt) {
+  if (!alt_configured() || alt == using_alt_) return false;
+  return switch_server();
+}
+
+// HG 本地改动：切换后端后的重连。和 `set server` 命令走同一条路——
+// 先关掉旧连接并丢掉会话（否则旧主机的 session 号会被新主机拒），再从头握一次手。
+void App::reconnect_to_new_server() {
+  fatal_.clear();
+  pairing_code_.clear();
+  unpaired_reason_.clear();
+  if (phase_ != Phase::Boot && phase_ != Phase::NoNetwork) {
+    hal_.transport->close();
+    drop_session("switched server");
+  }
+  backoff_ = 0;
+  reconnect_pending_ = network_up_;
+  reconnect_at_ = now();
   update_model();
 }
 
@@ -3303,6 +3363,11 @@ json::Value App::status_value() const {
       .set("profile", agent_profile_)
       .set("server", server_url_)
       .set("network", network_up_);
+  // HG 本地改动：`status` 里带上"当前后端名字"，主机侧一眼能看出设备连的是哪一个。
+  // 没有第二个后端时只报 hermes，字段形状不变，老的宿主代码不受影响。
+  s.set("backend", using_alt_ ? "openclaw" : "hermes");
+  // 备用的那个始终是 alt_server_url_（server_url_ 永远是"正在用的"）。
+  if (alt_configured()) s.set("alternate_server", alt_server_url_);
   if (profile_.tailnet) {
     json::Value tn = json::Value::object();
     tn.set("on", tailnet_on_).set("key", !tailnet_key_.empty()).set("up", tunnel_up_);
@@ -3425,6 +3490,32 @@ std::string App::console(std::string_view raw) {
   if (cmd == "settings") {
     if (rest == "close") { close_settings(); return "@ok settings closed"; }
     return open_settings() ? "@ok settings" : "@error settings unavailable during a prompt or update";
+  }
+  // HG 本地改动：`server` 查/切当前后端。`server hermes` 与 `server openclaw` 是
+  // 两个名字而不是 URL——按键和串口都只需要一个记忆单位，URL 仍由 `set server` 管。
+  if (cmd == "server") {
+    if (rest.empty()) {
+      json::Value v = json::Value::object();
+      v.set("active", using_alt_ ? "openclaw" : "hermes")
+          .set("url", server_url_)
+          .set("alternate", alt_server_url_);
+      return "@server " + v.dump();
+    }
+    if (rest == "hermes" || rest == "primary") {
+      if (!alt_configured()) return "@error no second server configured; set server2 <url> first";
+      if (using_alt_ && switch_server()) return "@ok server hermes";
+      return "@ok server hermes (already)";
+    }
+    if (rest == "openclaw" || rest == "alt" || rest == "alternate") {
+      if (!alt_configured()) return "@error no second server configured; set server2 <url> first";
+      if (!using_alt_ && switch_server()) return "@ok server openclaw";
+      return "@ok server openclaw (already)";
+    }
+    if (rest == "toggle") {
+      if (!switch_server()) return "@error no second server configured; set server2 <url> first";
+      return std::string("@ok server ") + (using_alt_ ? "openclaw" : "hermes");
+    }
+    return "@error usage: server [hermes | openclaw | toggle]";
   }
   if (cmd == "camera") {
     if (rest == "close") { close_camera(); return "@ok camera closed"; }

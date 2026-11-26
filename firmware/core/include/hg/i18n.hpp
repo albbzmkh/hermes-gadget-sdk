@@ -119,6 +119,12 @@ namespace hg::i18n {
   X(SdLog,                  "SD card logging") \
   X(SdLogOn,                "On\nThe log is copied to hermes.log on the microSD card.") \
   X(SdLogOff,               "Off\nNothing is written to the microSD card.") \
+  /* HG 本地改动：两个后端之间的切换（第二个地址不为空时才出现在设置里）。 */ \
+  X(Backend,                "Server") \
+  X(BackendAltOn,           "OpenClaw") \
+  X(BackendAltOff,          "Hermes") \
+  X(BackendUnavailable,     "No second server configured") \
+  X(BackendSwitched,        "Server: {0}") \
   X(FaceDownSleep,          "Face-down sleep") \
   X(FaceDownSleepOn,        "On\nFace down, the screen sleeps and Hermes stays quiet.") \
   X(FaceDownSleepOff,       "Off\nSelect to sleep when the gadget lies face down.") \
