@@ -237,12 +237,11 @@ void App::load_settings() {
   alt_server_url_ = setting("server2", profile_.default_alt_server_url);
   alt_access_token_ = setting("token2", profile_.default_alt_access_token);
   using_alt_ = alt_configured() && setting("server2_on", "off") == "on";
-  if (using_alt_) {
-    // 两个地址交换：server_url_/access_token_ 始终是"正在用的那个"，
-    // 这样连接、握手、重连、状态上报全都不用改。
-    std::swap(server_url_, alt_server_url_);
-    std::swap(access_token_, alt_access_token_);
-  }
+  // 两个槽各管各的键，永不交换：server_url_ 永远是 `server`（Hermes），
+  // alt_server_url_ 永远是 `server2`（OpenClaw）。哪个在用只看 using_alt_。
+  // 早先的写法是"把在用的那个换进 server_url_"，但那要求读设置时再换回来，
+  // 两处 swap 一旦有一条路径漏掉（比如切换后又重启），地址就会对调一次，
+  // 表现为"切过去连的是同一个地方"或者"两个地址越来越乱"。固定槽没有这种对称问题。
   talk_mode_ = setting("talk_mode", "hold") == "tap" ? TalkMode::Tap : TalkMode::Hold;
   int vol = std::atoi(setting("volume", "70").c_str());
   volume_ = static_cast<uint8_t>(std::max(0, std::min(100, vol)));
@@ -521,7 +520,7 @@ void App::tailnet_reconfigured() {
 
 void App::connect_now() {
   reconnect_pending_ = false;
-  if (server_url_.empty()) {
+  if (active_url().empty()) {
     fatal_ = "No Hermes server configured";
     phase_ = Phase::NoNetwork;
     update_model();
@@ -532,8 +531,8 @@ void App::connect_now() {
   transport_active_ = true;
   phase_ = Phase::Connecting;
   phase_since_ = now();
-  log(LogLevel::Info, std::string("connecting to ") + server_url_);
-  hal_.transport->connect(server_url_, proto::kSubprotocol);
+  log(LogLevel::Info, std::string("connecting to ") + active_url());
+  hal_.transport->connect(active_url(), proto::kSubprotocol);
   update_model();
 }
 
@@ -627,21 +626,15 @@ void App::on_transport_open() {
 // HG 本地改动：两个后端之间的切换。把"正在用的"和"备用的"对调，存进 NVS，重连。
 // 为什么换而不并存两条连接：两条 WebSocket 会同时占 RAM（这块板子内部 RAM 本来就紧），
 // 而且一对会话变量（session/pairing/prompt/录音）无法同时服务两个主机。
-// 为什么 swap 而不是重新读设置：swap 天然对称，来回切多少次都不会丢地址。
+// 两个地址各存各的键，切换只翻 using_alt_ 这一个开关，不搬动地址本身。
 bool App::switch_server() {
   if (!alt_configured()) return false;
-  std::swap(server_url_, alt_server_url_);
-  std::swap(access_token_, alt_access_token_);
   using_alt_ = !using_alt_;
   if (hal_.storage) {
-    // 三个键一起写：地址对、令牌对、以及"上次用的是哪个"。
-    hal_.storage->set(setting_storage_key("server"), server_url_);
-    hal_.storage->set(setting_storage_key("token"), access_token_);
-    hal_.storage->set(setting_storage_key("server2"), alt_server_url_);
-    hal_.storage->set(setting_storage_key("token2"), alt_access_token_);
+    // 只写"上次用的是哪个"。地址和令牌各自待在自己的槽里，没有理由重写。
     hal_.storage->set(setting_storage_key("server2_on"), using_alt_ ? "on" : "off");
   }
-  log(LogLevel::Info, std::string("switching to ") + (using_alt_ ? "the alternate server: " : "Hermes: ") + server_url_);
+  log(LogLevel::Info, std::string("switching to ") + (using_alt_ ? "the alternate server: " : "Hermes: ") + active_url());
   reconnect_to_new_server();
   return true;
 }
@@ -786,7 +779,7 @@ void App::send_hello() {
   for (const Thumb& t : thumb_slots_)
     if (t.ready) held.set(t.id, t.hash);
   if (thumb_px_) hello.set("thumbs", std::move(held));
-  if (!access_token_.empty()) hello.set("token", access_token_);
+  if (!active_token().empty()) hello.set("token", active_token());
   if (display_sleeping_) hello.set("display_sleeping", true);
   send(hello);
   sensors_dirty_ = false;
@@ -2916,6 +2909,10 @@ void App::update_model() {
   m.no.clear();
   m.qr = nullptr;
   m.face = face_ ? &*face_ : nullptr;
+  // HG 本地改动：连第二个后端时把吉祥物换成 OpenClaw 标记。
+  // 只在主机没推脸（face_ 为空）时才看得出来——主机推的脸更具体，应该盖过这个默认。
+  // 判据用 using_alt_（"用的是第二个地址"），不是拿 URL 里有没有 :8766 去猜端口。
+  m.alt_face = using_alt_ && !face_;
   m.expression = expression_now();
   m.expression_still = expression_still();
   m.dash.clear();
@@ -3078,7 +3075,7 @@ void App::update_model() {
     m.headline = tr(Msg::SetupNeeded);
     // The status report keeps the English reason; the screen shows it translated.
     const std::string reason = fatal_ == i18n::english(Msg::NoServerConfigured) ? tr(Msg::NoServerConfigured) : fatal_;
-    m.detail = reason + "\n" + (server_url_.empty() ? std::string(tr(Msg::SerialSetServer)) : tr(Msg::ServerUrl, {server_url_}));
+    m.detail = reason + "\n" + (active_url().empty() ? std::string(tr(Msg::SerialSetServer)) : tr(Msg::ServerUrl, {active_url()}));
     m.hint = tr(Msg::SeeDocs);
   } else if (phase_ == Phase::NoNetwork && !held) {
     m.screen = Screen::Offline;
@@ -3092,11 +3089,11 @@ void App::update_model() {
     m.hero = true;
     m.caption_lines = kCaptionLines;
     m.headline = tr(phase_ == Phase::Handshake ? Msg::Authenticating : Msg::ConnectingToHermes);
-    m.detail = server_url_;
+    m.detail = active_url();
     if (!last_close_.empty() && attempts_ > 1) m.detail += "\n" + tr(Msg::ConnectError, {last_close_});
     if (reconnect_pending_ && waiting_for_tunnel()) {
       // The port's words, like the Wi-Fi detail: "Joining tailnet", or why it failed.
-      m.detail = server_url_ + "\n" + (tunnel_detail_.empty() ? std::string("Joining tailnet") : tunnel_detail_);
+      m.detail = active_url() + "\n" + (tunnel_detail_.empty() ? std::string("Joining tailnet") : tunnel_detail_);
     } else if (reconnect_pending_) {
       uint32_t wait = static_cast<int32_t>(reconnect_at_ - now()) > 0 ? (reconnect_at_ - now() + 999) / 1000 : 0;
       m.hint = tr(Msg::RetryIn, {std::to_string(wait)});
@@ -3278,8 +3275,12 @@ void App::update_model() {
     m.hero = !showing_reply;
     if (m.hero) {
       const bool switching = agent_profiles_.size() > 1;
-      m.headline = switching && agent_profile_ != "default" ? tr(Msg::ProfileGreeting, {agent_profile_name()})
-                                                            : std::string(tr(Msg::HiImHermes));
+      // HG 本地改动：连第二个后端时首页写它自己的名字（Hi, I'm OpenClaw）。
+      // 为什么优先于 profile 名字：agent profile 是同一个主机下的子身份，
+      // 而这里换的是主机本身——用户要确认的是"我在命令谁"，主机名更直接。
+      m.headline = using_alt_ ? std::string(tr(Msg::HiImAlt))
+                   : switching && agent_profile_ != "default" ? tr(Msg::ProfileGreeting, {agent_profile_name()})
+                                                              : std::string(tr(Msg::HiImHermes));
       m.detail = tr(reply_.empty() || !profile_.has_scroll_buttons ? Msg::AskMeAnything : Msg::UpShowsLastReply);
       const bool sessions = dashboard_ready_ && can_open_dashboard() && reply_.empty();
       if (sessions)
@@ -3361,7 +3362,7 @@ json::Value App::status_value() const {
       .set("screen", screen_name(model_.screen))
       .set("paired", paired_)
       .set("profile", agent_profile_)
-      .set("server", server_url_)
+      .set("server", active_url())
       .set("network", network_up_);
   // HG 本地改动：`status` 里带上"当前后端名字"，主机侧一眼能看出设备连的是哪一个。
   // 没有第二个后端时只报 hermes，字段形状不变，老的宿主代码不受影响。
@@ -3497,8 +3498,8 @@ std::string App::console(std::string_view raw) {
     if (rest.empty()) {
       json::Value v = json::Value::object();
       v.set("active", using_alt_ ? "openclaw" : "hermes")
-          .set("url", server_url_)
-          .set("alternate", alt_server_url_);
+          .set("url", active_url())
+          .set("alternate", using_alt_ ? server_url_ : alt_server_url_);
       return "@server " + v.dump();
     }
     if (rest == "hermes" || rest == "primary") {

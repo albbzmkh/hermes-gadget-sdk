@@ -27,6 +27,9 @@ constexpr uint16_t kGreenDim = rgb565(28, 92, 62);
 constexpr uint16_t kBlueDim = rgb565(52, 96, 140);
 constexpr uint16_t kAccentDim = rgb565(110, 82, 30);
 constexpr uint16_t kRedDim = rgb565(122, 44, 44);
+// HG 本地改动：OpenClaw 标记的红，取自它自己图标里的品牌色（#ff4d4d 到 #991b1b 的中段）。
+// 单色位图只能换墨色，所以"红色的龙虾"就是这张位图配这个红。
+constexpr uint16_t kOpenClawRed = rgb565(230, 62, 62);
 
 class Hash {
  public:
@@ -273,13 +276,31 @@ mascot::Frame mascot_frame(const UiModel& m) {
   return still ? mascot::Frame::Idle : f;
 }
 
+// HG 本地改动：三处画吉祥物的地方共用这一个入口。
+// 主机推下来的脸（m.face）优先；否则看 m.alt_face 决定用哪一套内置图。
+// 放在 mascot_frame 之后，因为两者互相无关，但都要在 Ui 的方法用之前可见。
+mascot::Bitmap pick_face(const UiModel& m, int max_size, mascot::Frame frame) {
+  if (m.face) return mascot::pick(max_size, frame, m.face);
+  return m.alt_face ? mascot::alt::pick(max_size, frame) : mascot::pick(max_size, frame, nullptr);
+}
+
+// HG 本地改动：换一套图就要同时换锚点，否则音波和状态图标还按默认吉祥物的几何摆，
+// 会画到龙虾脸外面去。主机推的脸优先，其次看 m.alt_face。
+const mascot::Anchors& face_anchors(const UiModel& m) {
+  if (m.face) return mascot::anchors(m.face);
+  return m.alt_face ? mascot::alt::anchors() : mascot::anchors(nullptr);
+}
+
 // `b` (from mascot::pick) in `ink`, or the colour face at b's size, in b's frame.
-void draw_face(Canvas& c, int x, int y, const mascot::Bitmap& b, const mascot::Face* face, uint16_t ink) {
+// HG 本地改动：`alt` 那套图换成 OpenClaw 自己的红色，而不是默认墨色——单色位图只能换墨，
+// 换色就是"给同一张形状上不同的色"。主机推的彩色脸不受影响（它自带像素）。
+void draw_face(Canvas& c, int x, int y, const mascot::Bitmap& b, const mascot::Face* face, uint16_t ink,
+               bool alt = false) {
   if (face && face->rgb565) {
     const mascot::Band& band = face->band(b.frame);
     c.picture(x, y, b.size, face->rgb565, face->px, band.rgb565, band.y, band.rows);
   } else {
-    c.bitmap1(x, y, b.size, b.size, b.bits, ink);
+    c.bitmap1(x, y, b.size, b.size, b.bits, alt ? kOpenClawRed : ink);
   }
 }
 
@@ -634,7 +655,9 @@ void Ui::draw_frame(const UiModel& m) {
                   .get();
   Hash content;
   content.val(m.screen).add(m.detail).add(m.body).val(m.body_scale).add(m.code).val(m.scroll).val(m.color_test)
-      .val(m.qr ? m.qr->size : 0);
+      .val(m.qr ? m.qr->size : 0)
+      // HG 本地改动：换后端要重画，否则新的一帧不会因为只是"换了张脸"而失效。
+      .val(m.alt_face);
   if (!m.items.empty() || m.card_progress >= 0 || m.card_qr) {
     content.val(m.card_progress).val(m.item_sel);
     for (const std::string& item : m.items) content.add(item);
@@ -660,7 +683,10 @@ void Ui::draw_frame(const UiModel& m) {
       hash_[i] = hashes[i];
     }
     uint32_t stat = Hash().val(m.screen).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines)
-                        .val(m.name_target).add(m.face ? m.face->hash : std::string()).get();
+                        .val(m.name_target).add(m.face ? m.face->hash : std::string())
+                        // HG 本地改动：换后端就是换整张脸，静态哈希必须带它，否则切过去不重画。
+                        .val(m.alt_face)
+                        .get();
     uint32_t anim = hero_anim_key(m);
     int y0 = y_header, y1 = y_bottom;
     bool redraw = !valid_ || !hero_valid_ || stat != hero_static_;
@@ -1877,7 +1903,7 @@ void Ui::hero_anim_rows(const UiModel& m, mascot::Expression was, mascot::Frame 
                         int& y1) const {
   const HeroGeom g = hero_geom(m);
   const int size = g.size, my = g.y;
-  const mascot::Anchors& a = mascot::anchors(m.face);
+  const mascot::Anchors& a = face_anchors(m);
   const mascot::Expression now = expression(m);
   // A colour face's band, as the rows Canvas::picture draws it on at `size`.
   auto band_rows = [&](mascot::Frame frame, int& lo, int& hi) {
@@ -1949,9 +1975,9 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
 
   const HeroGeom g = hero_geom(m);
   const int size = g.size, mx = g.x, my = g.y;
-  const mascot::Anchors& a = mascot::anchors(m.face);
-  const mascot::Bitmap b = mascot::pick(size, mascot_frame(m), m.face);
-  draw_face(c, mx, my, b, m.face, kText);
+  const mascot::Anchors& a = face_anchors(m);
+  const mascot::Bitmap b = pick_face(m, size, mascot_frame(m));
+  draw_face(c, mx, my, b, m.face, kText, m.alt_face);
   const int stroke = std::max(2, size / 48);
   auto waves = [&](int cx, int cy, int dir, int lit, int phase, uint16_t on, uint16_t dim, int r0) {
     for (int i = 0; i < 3; ++i) {
@@ -2225,7 +2251,7 @@ void Ui::draw_alarm(const UiModel& m) {
     const int ls = s + 1;  // the label's scale
     const std::string label = m.detail.substr(0, m.detail.find('\n'));
     const int label_h = label.empty() ? 0 : Canvas::line_height(ls);
-    const mascot::Bitmap face = mascot::pick(H / 3, mascot::Frame::Idle, m.face);
+    const mascot::Bitmap face = pick_face(m, H / 3, mascot::Frame::Idle);
     const int face_size = face.size <= H / 3 ? face.size : 0;
     const int lo = 4 * s, hi = hy - gap;  // the group's rows: clear of the top edge and of the hint
 
@@ -2268,7 +2294,7 @@ void Ui::draw_alarm(const UiModel& m) {
     const int lh = Canvas::line_height(hs);
     int y = top;
     if (with_face) {
-      draw_face(panel, cx - face_size / 2, y, face, m.face, ink);
+      draw_face(panel, cx - face_size / 2, y, face, m.face, ink, m.alt_face);
       y += face_size + gap;
     }
     for (int i = 0; i < n; ++i, y += lh) {
@@ -2604,7 +2630,7 @@ void Ui::draw_clock(const UiModel& m) {
   // The profile's face where it has one, like the Ready screen and the alarm:
   // the 96 px bitmap where it fits, else the 64 px one, else none.
   auto face_at = [&m](int size) {
-    const mascot::Bitmap b = mascot::pick(size, mascot::Frame::Idle, m.face);
+    const mascot::Bitmap b = pick_face(m, size, mascot::Frame::Idle);
     return b.size == size ? b : mascot::Bitmap{};
   };
 
@@ -2697,7 +2723,7 @@ void Ui::draw_clock(const UiModel& m) {
       }
     }
 
-    if (face_y >= 0) draw_face(panel, cx + dx - face.size / 2, face_y + dy, face, m.face, kText);
+    if (face_y >= 0) draw_face(panel, cx + dx - face.size / 2, face_y + dy, face, m.face, kText, m.alt_face);
     panel.text(cx + dx - Canvas::text_width(m.clock_time, k) / 2, time_y + dy, m.clock_time, k, kText);
     if (Canvas::text_width(m.clock_date, ds) <= avail(date_y, date_y + Canvas::line_height(ds)))
       panel.text(cx + dx - Canvas::text_width(m.clock_date, ds) / 2, date_y + dy, m.clock_date, ds, kDim);

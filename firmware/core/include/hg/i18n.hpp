@@ -252,6 +252,8 @@ namespace hg::i18n {
   X(Image,                  "Image") \
   /* Ready screen */ \
   X(Ready,                  "Ready") \
+  /* HG 本地改动：连第二个后端（OpenClaw 桥）时首页换个名字，一眼看出在命令谁。 */ \
+  X(HiImAlt,                "Hi, I'm OpenClaw") \
   X(HiImHermes,             "Hi, I'm Hermes") \
   X(AskMeAnything,          "Ask me anything") \
   X(UpShowsLastReply,       "UP shows my last reply") \

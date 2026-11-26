@@ -239,6 +239,8 @@ const Entry kSpanish[] = {
     {Msg::Image, "Imagen"},
     // Ready screen
     {Msg::Ready, "Listo"},
+    // HG local change: second backend (the OpenClaw bridge) has its own name.
+    {Msg::HiImAlt, "Hola, soy OpenClaw"},
     {Msg::HiImHermes, "Hola, soy Hermes"},
     {Msg::AskMeAnything, "Pregúntame algo"},
     {Msg::UpShowsLastReply, "UP: mi última respuesta"},

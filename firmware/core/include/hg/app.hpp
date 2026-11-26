@@ -137,13 +137,20 @@ class App {
   // `tailnet` setting is on. The port reads the auth key from tailnet_key().
   bool tailnet_wanted() const { return profile_.tailnet && tailnet_on_; }
   const std::string& tailnet_key() const { return tailnet_key_; }
-  const std::string& server_url() const { return server_url_; }
   // HG 本地改动：两个后端的切换。alt 指 alternate_server_url（第二个服务端）。
   // 为什么放在 core：切换要重连、要改 NVS、要刷新界面，都只有 App 能干净地做；
-  // 端口层（按键回调、串口命令、设置菜单）只需要调下面三个入口。
+  // 端口层（按键回调、串口命令、设置菜单）只需要调下面几个入口。
+  //
+  // 两个槽是固定的：server_url_/access_token_ 永远对应 `server`/`token`，
+  // alt_server_url_/alt_access_token_ 永远对应 `server2`/`token2`，
+  // 切换只翻 using_alt_，永远不搬动地址本身。凡是要"正在用的那个"都走
+  // active_url()/active_token()，别再直接读 server_url_ 去连。
+  const std::string& server_url() const { return server_url_; }
   bool alt_configured() const { return !alt_server_url_.empty(); }
   bool using_alt() const { return using_alt_; }
   const std::string& alt_server_url() const { return alt_server_url_; }
+  const std::string& active_url() const { return using_alt_ ? alt_server_url_ : server_url_; }
+  const std::string& active_token() const { return using_alt_ ? alt_access_token_ : access_token_; }
   // 切到另一个后端并立刻重连。没有配置第二个地址时什么也不做并返回 false。
   bool switch_server();
   // 直接指定当前后端（串口 `server hermes|openclaw` 用），不切换时返回 false。

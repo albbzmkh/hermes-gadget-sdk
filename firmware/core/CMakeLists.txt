@@ -19,6 +19,7 @@ set(HG_CORE_SOURCES
     src/json.cpp
     src/mascot.cpp
     src/mascot_data.cpp
+    src/mascot_data_alt.cpp
     src/protocol.cpp
     src/qr.cpp
     src/setup.cpp
