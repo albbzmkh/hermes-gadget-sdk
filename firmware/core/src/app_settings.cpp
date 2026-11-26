@@ -8,10 +8,6 @@
 
 namespace hg {
 
-// HG 本地改动：按住 TALK+CANCEL 到这一秒数打开设置（只在没配第二个后端时用）。
-// 1 秒是上游原本的时长；配了第二个后端时 1 秒改去切换后端，这里就到 3 秒。
-constexpr uint32_t kServerSwitchHoldMs = 3000;
-
 bool App::settings_hold_live() const {
   return !prompt_showing() && !ota_busy() && !wifi_setup_open() && !phone_pairing_ && !alarm_;
 }
@@ -283,30 +279,12 @@ void App::settings_tick() {
     settings_scroll_ += d > 0 ? (d + 1) / 2 : (d - 1) / 2;
     update_model();
   }
-  // HG 本地改动：配了第二个后端时，TALK+CANCEL 同时按住变成两档：
-  //   1 秒 → 切到另一个后端（配了第二后端时 1 秒不再打开设置，否则 3 秒那档等不到）
-  //   3 秒 → 打开设置（比原来的 1 秒晚，但仍有入口）
-  // 为什么这样排：切后端是更频繁的动作，放第一档；设置是有意的长操作，多按 2 秒无妨。
-  // 两个后端的组合键都是同两个键，只能靠时长分档，不能用不同的键。
-  // 没配第二个后端（alt_configured() 为假）时完全保持上游的 1 秒打开设置。
-  const uint32_t chord_settings_ms = alt_configured() ? kServerSwitchHoldMs : 1000;
-  // 第一档（只在配了第二个后端时存在）：按住 1 秒就切换后端，切换后提示用了哪一个。
-  if (alt_configured() && talk_held_ && cancel_held_ && !settings_chord_fired_ && !camera_open_ &&
+  // HG 本地改动：这里原本把 TALK+CANCEL 拆成两档（1 秒切后端、3 秒开设置），因为两个
+  // 后端的切换只能和开设置抢同一对键。结果是同一对键用时长区分两个动作，既容易按错，
+  // 也把上游那行改了。现在切换后端的唯一入口是设置菜单里的 "Server" 行（低频动作，走
+  // 菜单合理），于是这段恢复成上游原文：按住 1 秒打开设置。
+  if (talk_held_ && cancel_held_ && !settings_chord_fired_ && !camera_open_ &&
       now() - talk_down_at_ >= 1000 && now() - cancel_down_at_ >= 1000) {
-    settings_chord_fired_ = true;
-    cancel_long_fired_ = true;
-    if (switch_server()) {
-      set_hint_flash(tr(i18n::Msg::BackendSwitched,
-                        {using_alt_ ? std::string(tr(i18n::Msg::BackendAltOn))
-                                    : std::string(tr(i18n::Msg::BackendAltOff))}));
-    } else {
-      set_hint_flash(tr(i18n::Msg::BackendUnavailable));
-    }
-    update_model();
-    return;
-  }
-  if (!alt_configured() && talk_held_ && cancel_held_ && !settings_chord_fired_ && !camera_open_ &&
-      now() - talk_down_at_ >= chord_settings_ms && now() - cancel_down_at_ >= chord_settings_ms) {
     if (open_settings()) {
       settings_chord_fired_ = true;
       cancel_long_fired_ = true;

@@ -29,9 +29,11 @@ constexpr uint8_t kButtonConfig = 0x49;
 constexpr uint8_t kShutdown = 0xA1;
 constexpr uint8_t kChargeStatus = 1 << 2;  // PMG2, CHG_STAT: low while charge current flows
 constexpr uint8_t kButtonDown = 1 << 0, kButtonWasPressed = 1 << 7;
-// The PM1 acts on its key by itself: a single click resets the ESP32, a double click powers
-// off, a long press enters download mode. The click is this firmware's (the screen), so the
-// reset goes; the long press is put at its longest, 4 s.
+// The PM1 acts on its key by itself and this firmware does not see those actions: a single
+// click resets the ESP32 (BTN_CFG_1 bit 0) and a double click powers the board off
+// (BTN_CFG_2 bit 0). The screen is this firmware's, so the click reset goes; the long-press
+// threshold is put at its longest, 4 s. What a long press does beyond that is not in
+// M5Stack's register map, so nothing here depends on it.
 constexpr uint8_t kNoClickReset = 1 << 0, kLongPressMask = 0x18, kLongPress4s = 0x18;
 // A reading outside a single Li-ion cell's range means the gauge has nothing to measure.
 constexpr uint16_t kMinCellMv = 2600, kMaxCellMv = 4450;
