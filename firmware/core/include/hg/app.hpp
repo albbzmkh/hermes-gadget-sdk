@@ -657,10 +657,14 @@ class App {
   // `language` is auto: follow the language Hermes sends in `welcome` (English until it does).
   bool lang_auto_ = false;
   std::optional<i18n::Lang> hermes_lang_;  // from the last `welcome` that named one this firmware has
-  enum class Menu : uint8_t { Closed, Volume, Brightness, TalkMode, TouchTalk, Profile, ProfileGrid, Microphone, Speaker, Display, Inputs,
+  // HG 本地改动：Backend 排在 Volume 之前，于是设置菜单列表里它是最上面那一行
+  // （settings_* 里的遍历都是从 Menu::Volume 走到 Menu::Back，所以顺序就是这个枚举的
+  // 声明顺序）。放在最上面是因为这是切换后端唯一的入口，藏到列表末尾不好找。
+  // 没配第二个后端时 menu_offered() 会跳过它，所以其他板子的菜单完全不变。
+  enum class Menu : uint8_t { Closed, Backend, Volume, Brightness, TalkMode, TouchTalk, Profile, ProfileGrid, Microphone, Speaker, Display, Inputs,
                               Camera, Info, Power, BatteryAlert, BatteryAlertSound, ChargingNotice, ChargingSound, ChargedNotice, ChargedSound,
                               WifiDeepSleep, IdleTimer, TouchWake, FaceDownSleep, Clock, PowerOff, WifiSetup, Phone, Language, DoubleHome,
-                              WakeTalk, Animation, SdLog, Backend, Back };
+                              WakeTalk, Animation, SdLog, Back };
   enum class HardwareCheck : uint8_t { None, Microphone, Speaker, Display, Inputs };
   Menu menu_ = Menu::Closed;
   // The settings list's scroll in pixels, and where it eases to. It follows the
