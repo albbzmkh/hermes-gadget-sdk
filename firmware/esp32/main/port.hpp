@@ -430,6 +430,9 @@ class AmoledDisplay final : public hg::Display {
   SemaphoreHandle_t done_ = nullptr;
   std::optional<hg::BandFlush> bands_;
   bool panel_on_ = true;
+  // HG 本地改动：面板是否处于 0x10（sleep in）状态，和 panel_on_ 分开记——
+  // 0x28 只关显示，0x10 才是真低功耗，两者可以独立跳变。
+  bool panel_asleep_ = false;
 };
 
 // The GPIO interrupt service, installed once for every driver that adds a pin handler: a second

@@ -22,6 +22,9 @@ namespace {
 const char* TAG = "hg.amoled";
 constexpr spi_host_device_t kHost = SPI2_HOST;
 constexpr int kBounceRows = 16;  // even, so every chunk keeps the window even
+// HG 本地改动：0x11（sleep out）到 0x29（display on）之间要等面板重新稳住。
+// 20 ms 是 M5Stack 自己 amoled 初始化序列里给的值；短了会出现第一次醒屏花屏。
+constexpr uint32_t kSleepOutMs = 20;
 
 constexpr uint32_t command_word(uint8_t cmd) { return (0x02u << 24) | (static_cast<uint32_t>(cmd) << 8); }
 constexpr uint32_t kRamWrite = (0x32u << 24) | (0x2Cu << 8);
@@ -318,9 +321,24 @@ void AmoledDisplay::set_backlight(uint8_t percent) {
   const uint8_t level = static_cast<uint8_t>(255u * std::min<uint8_t>(percent, 100) / 100u);
   // Zero is screen sleep: turn the panel's output off too (display off keeps
   // its memory, so drawing continues and waking needs no redraw delay).
-  if (level && !panel_on_) command(0x29, nullptr, 0);  // display on
+  // HG 本地改动：显示关掉之后再多发一条 0x10（sleep in）。0x28 只是不再扫描输出，
+  // 面板的驱动电路还在跑；0x10 才把它送进低功耗态，息屏待机省的那几毫安主要在这。
+  // GRAM 在进入 sleep 后仍然保留，醒屏不必重画，但醒来要多等面板稳住的时间
+  // （kSleepOutMs）——见下面醒来那一路。
+  if (level) {
+    if (panel_asleep_) {
+      command(0x11, nullptr, 0);                     // sleep out
+      vTaskDelay(pdMS_TO_TICKS(kSleepOutMs));
+      panel_asleep_ = false;
+    }
+    if (!panel_on_) command(0x29, nullptr, 0);       // display on
+  }
   command(0x51, &level, 1);
   if (!level && panel_on_) command(0x28, nullptr, 0);  // display off
+  if (!level && !panel_asleep_) {
+    command(0x10, nullptr, 0);                       // sleep in
+    panel_asleep_ = true;
+  }
   panel_on_ = level != 0;
 }
 

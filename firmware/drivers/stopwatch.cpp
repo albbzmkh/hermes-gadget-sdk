@@ -7,6 +7,17 @@ namespace {
 // M5PM1 registers, from M5Stack's M5PM1 library (src/M5PM1.h, commit 315d2899).
 constexpr uint8_t kI2cConfig = 0x09;      // 0 = no I2C idle sleep
 constexpr uint8_t kWatchdog = 0x0A;       // 0 = watchdog off
+// HG 本地改动：电源位与保持位（位定义见 M5PM1.h）。
+// 0x06: [4] LED_EN（默认电平）/ [3] BOOST_EN / [2] LDO_EN 3.3V / [1] DCDC_EN 5V / [0] CHG_EN
+// 0x07: [6] BOOST hold / [5] LDO hold / [4..0] GPIO4..0 hold
+constexpr uint8_t kPowerCfg = 0x06;
+constexpr uint8_t kHoldCfg = 0x07;
+constexpr uint8_t kLedEnable = 1u << 4;
+constexpr uint8_t kBoostEnable = 1u << 3;
+constexpr uint8_t kLdoEnable = 1u << 2;
+constexpr uint8_t kDcdcEnable = 1u << 1;
+constexpr uint8_t kChargeEnable = 1u << 0;
+constexpr uint8_t kHoldLdo = 1u << 5;
 constexpr uint8_t kSystemCommand = 0x0C;
 constexpr uint8_t kGpioIn = 0x12;         // input level, 1 bit per pin
 constexpr uint8_t kBatteryMv = 0x22;      // millivolts, little-endian
@@ -68,6 +79,17 @@ bool StopWatchControl::begin() {
   // Both chips stay powered through an ESP32 reset, so an earlier firmware may
   // have left their I2C idle sleep or the PM1's watchdog on.
   if (!pm1_.write(kI2cConfig, 0x00) || !pm1_.write(kWatchdog, 0x00)) return false;
+  // HG 本地改动：明确写出 0x06，而不是让它停在上电默认值。
+  // 为什么要写：PM1 由电池直连供电，ESP32 复位时它不跟着复位，所以 0x06 里留着
+  // 上一次是谁写的值——刷了别家固件之后再回来，灯和升压可能是开的。
+  // 关的是两位：
+  //   [4] LED_EN — 这颗灯接在 L0 母线上，不受下面那些 PYG 开关控制，只有写这一位才熄；
+  //       这块板子的电源指示是 AMOLED，灯只是白耗电（M5Stack 自己的 hal_display.cpp
+  //       也是这么处理的）。
+  //   [3] BOOST_EN — 把电池升到 5 V 供 5VINOUT（Grove 口），没有接东西。
+  // 其余三位（LDO 3.3V / DCDC 5V / CHG）照常开着，那是这块板子运行的必需品。
+  constexpr uint8_t kPowerCfgBase = kLdoEnable | kDcdcEnable | kChargeEnable;
+  if (!pm1_.write(kPowerCfg, kPowerCfgBase)) return false;
   if (!pm1_change(kButtonConfig, kNoClickReset | kLongPressMask, kNoClickReset | kLongPress4s)) return false;
   // The key is polled (take_key_press), so nothing may pull the PM1's interrupt line.
   if (!pm1_.write(kIrqMask1, 0x1F) || !pm1_.write(kIrqMask2, 0x3F) || !pm1_.write(kIrqMask3, 0x07)) return false;
@@ -147,6 +169,9 @@ bool StopWatchControl::take_key_press() {
 
 bool StopWatchControl::power_off() {
   set_amplifier(false);
+  // HG 本地改动：关机前先把灯熄掉。USB 还接着的时候 PM1 会保持 L0 带电，灯就还亮着，
+  // 看起来像没关成。
+  pm1_.write(kPowerCfg, kLdoEnable | kDcdcEnable | kChargeEnable);
   return pm1_.write(kSystemCommand, kShutdown);
 }
 
