@@ -10,5 +10,12 @@ phy_init, data, phy,     0x11000,  0x1000
 # start on a 64 KB boundary. A board updated over the air keeps its old table and
 # has no core dump until it is flashed over USB again.
 coredump, data, coredump, 0x12000, 0xE000
-ota_0,    app,  ota_0,   0x20000,  0x1f0000
-ota_1,    app,  ota_1,   0x210000, 0x1f0000
+# HG 本地改动：两块 app 从 1984 KB 扩到 3008 KB。16 MB 的 flash 原来只用了 4 MB，
+# 而把 12x12 的 CJK 字体编进来要多吃约 158 KB，1984 KB 的槽只剩 5% 余量，低于项目
+# 自己要求的 10%。扩到 3008 KB 后余量约 37%。总占用到 0x600000（6 MB）。
+#   ota_0 0x20000 + 0x2f0000 = 0x310000（= ota_1 起点）
+#   ota_1 0x310000 + 0x2f0000 = 0x600000
+# nvs（0x9000，表里没列，由 IDF 按约定使用）、otadata、phy_init、coredump 全不动，
+# 所以改这张表只影响 app 槽，配置和崩溃记录都保得住。改表后必须用 USB 从 0x0 全量刷。
+ota_0,    app,  ota_0,   0x20000,  0x2f0000
+ota_1,    app,  ota_1,   0x310000, 0x2f0000
