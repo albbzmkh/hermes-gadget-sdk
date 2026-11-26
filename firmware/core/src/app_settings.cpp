@@ -62,7 +62,10 @@ bool App::open_settings() {
   else if (mode_ == Mode::Thinking || mode_ == Mode::Responding) cancel_turn();
   stop_playback();
   dismiss_overlay();
-  menu_ = Menu::Volume;
+  // 从第一行开始，跳过这一块板子上不提供的那几项（比如没配第二后端时的 Backend）。
+  menu_ = Menu::Backend;
+  while (!menu_offered(menu_) && menu_ != Menu::Back)
+    menu_ = static_cast<Menu>(static_cast<int>(menu_) + 1);
   power_off_armed_ = false;
   check_result_.clear();
   update_model();
@@ -106,8 +109,8 @@ void App::settings_input(Button button, bool pressed) {
     settings_follow_ = true;
     do {
       int item = static_cast<int>(menu_) + (button == Button::Up ? -1 : 1);
-      if (item < static_cast<int>(Menu::Volume)) item = static_cast<int>(Menu::Back);
-      if (item > static_cast<int>(Menu::Back)) item = static_cast<int>(Menu::Volume);
+      if (item < static_cast<int>(Menu::Backend)) item = static_cast<int>(Menu::Back);
+      if (item > static_cast<int>(Menu::Back)) item = static_cast<int>(Menu::Backend);
       menu_ = static_cast<Menu>(item);
     } while (!menu_offered(menu_));
     return;
@@ -315,7 +318,7 @@ void App::settings_model() {
   m.settings.clear();
   m.settings_sel = 0;
   UiModel item_text;
-  for (int i = static_cast<int>(Menu::Volume); i <= static_cast<int>(Menu::Back); ++i) {
+  for (int i = static_cast<int>(Menu::Backend); i <= static_cast<int>(Menu::Back); ++i) {
     const Menu item = static_cast<Menu>(i);
     if (!menu_offered(item)) continue;
     item_text.detail.clear();
@@ -405,7 +408,7 @@ bool App::settings_list_live() const {
 }
 
 App::Menu App::settings_item_at(int row) const {
-  for (int i = static_cast<int>(Menu::Volume); i <= static_cast<int>(Menu::Back); ++i) {
+  for (int i = static_cast<int>(Menu::Backend); i <= static_cast<int>(Menu::Back); ++i) {
     const Menu item = static_cast<Menu>(i);
     if (menu_offered(item) && row-- == 0) return item;
   }
