@@ -1097,6 +1097,12 @@ BoardConfig make() {
   b.buttons = {1, 2, -1, -1};  // blue (KEYB) talks, yellow (KEYA) cancels
   b.talk_label = "Blue";
   b.cancel_label = "Yellow";
+  // Dozing on battery with the screen off, let the chip light-sleep between events.
+  // keep_pins_through_sleep() then holds the QSPI lines so the panel keeps its picture
+  // and does not come back blank. The two keys are the wake source: both are plain
+  // ESP32 pins (GPIO 1 and 2) that this firmware polls, and a poll lengthens the wait
+  // between sleeps, not the sleep itself.
+  b.light_sleep = true;
   return b;
 }
 #elif CONFIG_HG_BOARD_T_DISPLAY_S3

@@ -16,6 +16,31 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_HG_BOARD_STOPWATCH=y
 
+# Battery life, the same block the two AMOLED watch boards carry (see app_main and
+# EspSystem::enable_doze). Without CONFIG_PM_ENABLE the CPU stays at 240 MHz whatever
+# the load is; with it, the CPU drops to 80 MHz whenever no driver asks for more, and
+# light sleep is offered only while the gadget dozes on battery with the screen off.
+CONFIG_PM_ENABLE=y
+# Light sleep needs tickless idle: the idle task suppresses its own ticks and the chip
+# sleeps until the nearest timer, so anything that keeps a 1 ms tick running defeats it.
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+# And never while a USB host is connected: the serial console and JTAG stop working
+# under light sleep. The app's on-battery check is the main guard.
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+# Wi-Fi wakes for each beacon from light sleep on the slow clock's timing. The default
+# 150 kHz RC drifts enough to miss beacons on a weak link; the board has no 32 kHz
+# crystal, so use the steadier 17.5 MHz / 256 oscillator.
+# CONFIG_RTC_CLK_SRC_INT_RC is not set
+CONFIG_RTC_CLK_SRC_INT_8MD256=y
+# Counts light sleep for the log line that ends each doze (EspSystem::set_dozing).
+CONFIG_PM_LIGHT_SLEEP_CALLBACKS=y
+# How long the idle task must be able to stand still before it is worth the entry and
+# exit cost of a light sleep. The upstream default is 8 ticks = 8 ms at 1000 Hz, which
+# on this board produced sub-10 ms sleeps: the chip spent more time entering and leaving
+# sleep than sleeping. 50 ms is short enough that the 120 ms doze poll still gets a
+# sleep in, long enough that the wake-up overhead is paid back.
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=50
+
 # TCP windows for links with a long round trip (a phone hotspot): 5,760 B capped
 # a connection near 33 KB/s at 175 ms, below 24 kHz audio's 48 KB/s.
 # Wi-Fi and lwIP buffers in PSRAM first, internal RAM when the module has none.
