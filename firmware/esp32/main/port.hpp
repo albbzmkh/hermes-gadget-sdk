@@ -159,12 +159,31 @@ class EspSystem final : public hg::System {
   static inline void (*on_sleep_held_change)() = nullptr;  // e.g. end the touch task's wait
   std::function<void()> on_doze_start;  // e.g. power the speaker down
   std::function<void()> on_doze_end;    // e.g. power it up, retry Wi-Fi now: the user is back
+  // HG 本地改动：睡眠账本。测电池时串口是拔掉的，那行 "awake after ... light sleep N%"
+  // 只在插回电脑后看得到，而插上 USB 就再也进不了 light sleep——所以必须有一份能
+  // 事后读的账。这里累计本次上电以来的 doze 总时长、light sleep 总时长、唤醒次数，
+  // 由 diag 的 sleep 段读出来。
+  // 不走 NVS：上电清零正好对应"这一块电池能撑多久"，而为一行统计多一次 flash 擦除不值。
+  struct SleepTally {
+    uint32_t doze_s = 0;               // 累计处于 doze 的秒数
+    uint32_t sleep_s = 0;              // 其中真正 light sleep 掉的秒数
+    uint32_t wakeups = 0;              // light sleep 被打断的次数
+    uint16_t dozes = 0;                // 进入 doze 的次数
+    uint8_t last_percent = 0;          // 最近一次 doze 的睡眠占比
+    uint32_t shortest_sleep_us = 0;    // 最短的一次 light sleep
+    uint32_t longest_sleep_us = 0;     // 最长的一次
+    uint32_t avg_sleep_us = 0;         // 平均每次
+    uint32_t refused = 0;              // 想睡没睡成（空闲窗口不够）的次数
+  };
+  static SleepTally sleep_tally();
+  // 把 esp_pm_dump_locks() 的表解析成 JSON：每个锁的名字、类型、是否在持、占比，
+  // 以及 IDF 自己记的 mode 统计与 light sleep 成功/被拒计数。查"谁在阻止睡眠"靠这张表。
+  static void pm_lock_report(hg::json::Value& out);
 
  private:
   esp_pm_lock_handle_t awake_ = nullptr;  // held whenever not dozing
   bool dozing_ = false;
-  int64_t doze_started_us_ = 0;
-};
+  int64_t doze_started_us_ = 0;};
 
 class NvsStorage final : public hg::Storage {
  public:

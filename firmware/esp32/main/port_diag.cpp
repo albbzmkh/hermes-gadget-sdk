@@ -318,6 +318,23 @@ void report(hg::json::Value& r) {
       .set("rtc", g_parts.rtc);
   r.set("wifi", wifi()).set("parts", parts).set("i2c", i2c_scan());
   r.set("stacks", stacks(r));
+  // HG 本地改动：睡眠账本与电源锁账本。拔线测完电量、插回来敲一次 diag 就能核对
+  // 这次到底睡了多久、被谁挡住——不然只能靠"感觉快不快"。详见 port.hpp 的 SleepTally。
+  const EspSystem::SleepTally tally = EspSystem::sleep_tally();
+  hg::json::Value sleep = hg::json::Value::object();
+  sleep.set("dozes", static_cast<int>(tally.dozes))
+      .set("doze_s", static_cast<int>(tally.doze_s))
+      .set("light_sleep_s", static_cast<int>(tally.sleep_s))
+      .set("light_sleep_pct", static_cast<int>(tally.last_percent))
+      .set("wakeups", static_cast<int>(tally.wakeups))
+      .set("refused", static_cast<int>(tally.refused))
+      .set("sleep_ms_avg", static_cast<int>(tally.avg_sleep_us / 1000))
+      .set("sleep_ms_min", static_cast<int>(tally.shortest_sleep_us / 1000))
+      .set("sleep_ms_max", static_cast<int>(tally.longest_sleep_us / 1000));
+  r.set("sleep", sleep);
+  hg::json::Value pmlocks = hg::json::Value::object();
+  EspSystem::pm_lock_report(pmlocks);
+  r.set("pmlocks", pmlocks);
   if (g_parts.motion) {
     int16_t x = 0, y = 0, z = 0;
     g_parts.motion->latest(x, y, z);
